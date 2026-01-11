@@ -20,31 +20,71 @@
 ?country=Россия
 ```
 
+**Примеры:**
+- [Россия](https://sinty.github.io/RadioMap/?country=Россия)
+- [Япония](https://sinty.github.io/RadioMap/?country=Япония)
+- [Китай](https://sinty.github.io/RadioMap/?country=Китай)
+- [США](https://sinty.github.io/RadioMap/?country=США)
+- [Германия](https://sinty.github.io/RadioMap/?country=Германия)
+
 #### Страна + Город
 ```
 ?country=Россия&city=Москва
 ```
+
+**Примеры:**
+- [Москва, Россия](https://sinty.github.io/RadioMap/?country=Россия&city=Москва)
+- [Санкт-Петербург, Россия](https://sinty.github.io/RadioMap/?country=Россия&city=Санкт-Петербург)
+- [Токио, Япония](https://sinty.github.io/RadioMap/?country=Япония&city=Токио)
+- [Владивосток, Россия](https://sinty.github.io/RadioMap/?country=Россия&city=Владивосток)
+- [Новосибирск, Россия](https://sinty.github.io/RadioMap/?country=Россия&city=Новосибирск)
+- [Нижний Новгород, Россия](https://sinty.github.io/RadioMap/?country=Россия&city=Нижний%20Новгород)
+- [Ростов-на-Дону, Россия](https://sinty.github.io/RadioMap/?country=Россия&city=Ростов-на-Дону)
 
 #### Страна + Регион
 ```
 ?country=Россия&region=Московская область
 ```
 
+**Примеры:**
+- [Московская область, Россия](https://sinty.github.io/RadioMap/?country=Россия&region=Московская%20область)
+- [Ленинградская область, Россия](https://sinty.github.io/RadioMap/?country=Россия&region=Ленинградская%20область)
+- [Краснодарский край, Россия](https://sinty.github.io/RadioMap/?country=Россия&region=Краснодарский%20край)
+- [Свердловская область, Россия](https://sinty.github.io/RadioMap/?country=Россия&region=Свердловская%20область)
+
 #### RDA район
 ```
 ?rda=CB-54
 ```
+
+**Примеры:**
+- [CB-54 (Москва)](https://sinty.github.io/RadioMap/?rda=CB-54)
+- [SP-01 (Санкт-Петербург)](https://sinty.github.io/RadioMap/?rda=SP-01)
+- [KL-01 (Калининград)](https://sinty.github.io/RadioMap/?rda=KL-01)
+- [NO-01 (Новосибирск)](https://sinty.github.io/RadioMap/?rda=NO-01)
 
 #### QTH локатор
 ```
 ?qth=KO85SP
 ```
 
+**Примеры:**
+- [KO85SP (Москва, 6 символов)](https://sinty.github.io/RadioMap/?qth=KO85SP)
+- [KO85SP47IR (Москва, 10 символов)](https://sinty.github.io/RadioMap/?qth=KO85SP47IR)
+- [KO85 (Москва, 4 символа)](https://sinty.github.io/RadioMap/?qth=KO85)
+- [KO85SP12 (Москва, 8 символов)](https://sinty.github.io/RadioMap/?qth=KO85SP12)
+- [UN78 (Новосибирск)](https://sinty.github.io/RadioMap/?qth=UN78)
+- [KN29 (Санкт-Петербург)](https://sinty.github.io/RadioMap/?qth=KN29)
+
 #### Комбинации
 ```
 ?country=Швеция&city=Гетеборг
 ?qth=KO85SP47IR
 ```
+
+**Примеры:**
+- [Гетеборг, Швеция](https://sinty.github.io/RadioMap/?country=Швеция&city=Гетеборг)
+- [Стокгольм, Швеция](https://sinty.github.io/RadioMap/?country=Швеция&city=Стокгольм)
 
 ## Технологии
 
