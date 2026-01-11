@@ -55,21 +55,34 @@
 
 ## Установка
 
-Просто откройте `index.html` в браузере или разместите файлы на веб-сервере.
+### Использование с GitHub
 
-### Локальный запуск
+После загрузки репозитория на GitHub, страницу можно открыть через:
 
-Для работы с `file:///` протоколом рекомендуется использовать локальный сервер:
+1. **GitHub Pages** (рекомендуется):
+   - Перейдите в Settings → Pages
+   - Выберите источник: Deploy from a branch
+   - Выберите ветку: `master` (или `main`)
+   - Выберите папку: `/ (root)`
+   - Сохраните и откройте `https://ваш-username.github.io/RadioMap/`
 
-```bash
-# Python 3
-python -m http.server 8000
+2. **Прямая ссылка через raw.githack.com**:
+   ```
+   https://raw.githack.com/ваш-username/RadioMap/master/index.html
+   ```
 
-# Node.js (http-server)
-npx http-server
-```
+3. **Локальный запуск**:
+   Для работы с `file:///` протоколом рекомендуется использовать локальный сервер:
 
-Затем откройте `http://localhost:8000/index.html`
+   ```bash
+   # Python 3
+   python -m http.server 8000
+
+   # Node.js (http-server)
+   npx http-server
+   ```
+
+   Затем откройте `http://localhost:8000/index.html`
 
 ## Структура проекта
 
