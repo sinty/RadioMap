@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Карта России - OpenStreetMap</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+        
+        #map {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        .error-message {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(220, 53, 69, 0.95);
+            color: white;
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            font-size: 16px;
+            max-width: 80%;
+            text-align: center;
+            animation: slideDown 0.3s ease-out;
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+        }
+        
+        .error-text {
+            margin-bottom: 15px;
+            word-wrap: break-word;
+            cursor: text;
+        }
+        
+        .error-button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid white;
+            color: white;
+            padding: 8px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+        
+        .error-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.05);
+        }
+        
+        .error-button:active {
+            transform: scale(0.95);
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateX(-50%) translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            font-size: 16px;
+            text-align: center;
+        }
+        
+        .debug-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.85);
+            color: #0f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-width: 600px;
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 2000;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
+            display: none;
+        }
+        
+        .debug-panel.visible {
+            display: block;
+        }
+        
+        .debug-panel h3 {
+            margin: 0 0 10px 0;
+            color: #0ff;
+            font-size: 14px;
+        }
+        
+        .debug-panel .log-entry {
+            margin: 5px 0;
+            padding: 3px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .debug-panel .log-entry.error {
+            color: #f44;
+        }
+        
+        .debug-panel .log-entry.warn {
+            color: #ff4;
+        }
+        
+        .debug-panel .log-entry.success {
+            color: #4f4;
+        }
+        
+        .debug-toggle {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: 1px solid #555;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 2001;
+            font-size: 12px;
+        }
+        
+        .debug-toggle:hover {
+            background: rgba(0, 0, 0, 0.9);
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="error" class="error-message" style="display: none;">
+        <div class="error-text" id="error-text"></div>
+        <button class="error-button" id="reload-button" onclick="window.location.reload()">Перезагрузить</button>
+    </div>
+    <div id="loading" class="loading" style="display: none;">Загрузка карты...</div>
+    <button class="debug-toggle" id="debug-toggle" onclick="toggleDebug()">Показать отладку</button>
+    <div id="debug-panel" class="debug-panel">
+        <h3>Панель отладки</h3>
+        <div id="debug-log"></div>
+    </div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

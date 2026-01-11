@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Тест параметров URL</title>
+</head>
+<body>
+    <h1>Тест параметров URL</h1>
+    <div id="output"></div>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const output = document.getElementById('output');
+        output.innerHTML = `
+            <p><strong>Полный URL:</strong> ${window.location.href}</p>
+            <p><strong>Search:</strong> ${window.location.search}</p>
+            <p><strong>Country:</strong> ${params.get('country') || 'не указан'}</p>
+            <p><strong>City:</strong> ${params.get('city') || 'не указан'}</p>
+            <p><strong>Region:</strong> ${params.get('region') || 'не указан'}</p>
+        `;
+    </script>
+</body>
+</html>
