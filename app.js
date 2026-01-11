@@ -310,9 +310,17 @@ async function getBoundary(osmId, osmType) {
                     const coordinates = [];
                     for (const member of outerWays) {
                         if (member.geometry && member.geometry.length > 0) {
-                            // Фильтруем валидные координаты
+                            // Фильтруем и нормализуем координаты (для восточных частей)
                             const validCoords = member.geometry
-                                .map(coord => [coord.lat, coord.lon])
+                                .map(coord => {
+                                    let lat = coord.lat;
+                                    let lon = coord.lon;
+                                    // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                                    if (lon > 180) {
+                                        lon = lon - 360;
+                                    }
+                                    return [lat, lon];
+                                })
                                 .filter(coord => {
                                     const lat = coord[0];
                                     const lon = coord[1];
@@ -331,9 +339,17 @@ async function getBoundary(osmId, osmType) {
             
             // Для way получаем geometry напрямую
             if (element.type === 'way' && element.geometry) {
-                // Фильтруем валидные координаты
+                // Фильтруем и нормализуем координаты (для восточных частей)
                 const validCoords = element.geometry
-                    .map(coord => [coord.lat, coord.lon])
+                    .map(coord => {
+                        let lat = coord.lat;
+                        let lon = coord.lon;
+                        // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                        if (lon > 180) {
+                            lon = lon - 360;
+                        }
+                        return [lat, lon];
+                    })
                     .filter(coord => {
                         const lat = coord[0];
                         const lon = coord[1];
@@ -374,7 +390,9 @@ async function getBoundaryByQuery(query, country = 'Россия') {
     const fullQuery = query;
     
     // Сначала пробуем получить через Nominatim с polygon_geojson
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(fullQuery)}&format=json&limit=1&accept-language=ru&polygon_geojson=1&addressdetails=1`;
+    // Используем polygon_kml=1 для более детальных данных, или polygon_geojson=1
+    // Для стран лучше использовать polygon_geojson=1 без упрощения
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(fullQuery)}&format=json&limit=1&accept-language=ru&polygon_geojson=1&addressdetails=1&extratags=1`;
     
     try {
         const response = await fetch(url, {
@@ -392,10 +410,15 @@ async function getBoundaryByQuery(query, country = 'Россия') {
         
         if (data && data.length > 0) {
             console.log('Данные от Nominatim:', data[0]);
+            addDebugLog(`Nominatim вернул данные: type=${data[0].osm_type}, id=${data[0].osm_id}`, 'info');
             
             // Если есть geojson напрямую
             if (data[0].geojson) {
                 console.log('Найден GeoJSON в Nominatim');
+                addDebugLog(`GeoJSON найден в Nominatim, тип: ${data[0].geojson.type}`, 'info');
+                if (data[0].geojson.type === 'MultiPolygon') {
+                    addDebugLog(`MultiPolygon содержит ${data[0].geojson.coordinates ? data[0].geojson.coordinates.length : 0} полигонов`, 'info');
+                }
                 return data[0].geojson;
             }
             
@@ -404,11 +427,23 @@ async function getBoundaryByQuery(query, country = 'Россия') {
             const osmType = data[0].osm_type;
             
             console.log('OSM ID:', osmId, 'OSM Type:', osmType);
+            addDebugLog(`OSM ID: ${osmId}, OSM Type: ${osmType}`, 'info');
             
             if (osmId && osmType) {
+                // Для России (OSM ID 60199) используем Overpass напрямую для получения полных данных
+                if (osmId === 60199 || (query === 'Россия' && osmType === 'relation')) {
+                    addDebugLog('Для России используем Overpass для получения полных границ', 'info');
+                    const overpassResult = await getBoundaryByOverpassQuery('Россия', null, true);
+                    if (overpassResult) {
+                        addDebugLog('Границы России получены через Overpass', 'success');
+                        return overpassResult;
+                    }
+                }
+                
                 const boundary = await getBoundary(osmId, osmType);
                 if (boundary) {
                     console.log('Границы получены через OSM ID');
+                    addDebugLog('Границы получены через OSM ID', 'success');
                     return boundary;
                 }
             }
@@ -416,6 +451,7 @@ async function getBoundaryByQuery(query, country = 'Россия') {
             // Если это relation, пробуем получить через Overpass напрямую по имени
             if (osmType === 'relation') {
                 console.log('Пробуем получить через Overpass по имени');
+                addDebugLog('Пробуем получить через Overpass по имени', 'info');
                 const overpassResult = await getBoundaryByOverpassQuery(query, null, true); // true = это страна
                 if (overpassResult) {
                     return overpassResult;
@@ -424,11 +460,13 @@ async function getBoundaryByQuery(query, country = 'Россия') {
             
             // Если ничего не помогло, пробуем напрямую через Overpass с разными вариантами названий
             console.log('Пробуем альтернативные варианты поиска через Overpass');
+            addDebugLog('Пробуем альтернативные варианты поиска через Overpass', 'info');
             const alternativeNames = getAlternativeCountryNames(query);
             for (const altName of alternativeNames) {
                 const result = await getBoundaryByOverpassQuery(altName, null, true);
                 if (result) {
                     console.log('Границы найдены по альтернативному названию:', altName);
+                    addDebugLog(`Границы найдены по альтернативному названию: ${altName}`, 'success');
                     return result;
                 }
             }
@@ -499,9 +537,17 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
                     const coordinates = [];
                     for (const member of outerWays) {
                         if (member.geometry && member.geometry.length > 0) {
-                            // Фильтруем валидные координаты
+                            // Фильтруем и нормализуем координаты (для восточных частей)
                             const validCoords = member.geometry
-                                .map(coord => [coord.lat, coord.lon])
+                                .map(coord => {
+                                    let lat = coord.lat;
+                                    let lon = coord.lon;
+                                    // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                                    if (lon > 180) {
+                                        lon = lon - 360;
+                                    }
+                                    return [lat, lon];
+                                })
                                 .filter(coord => {
                                     const lat = coord[0];
                                     const lon = coord[1];
@@ -526,9 +572,17 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
                 const coordinates = [];
                 ways.forEach(way => {
                     if (way.geometry && way.geometry.length > 0) {
-                        // Фильтруем валидные координаты
+                        // Фильтруем и нормализуем координаты (для восточных частей)
                         const validCoords = way.geometry
-                            .map(coord => [coord.lat, coord.lon])
+                            .map(coord => {
+                                let lat = coord.lat;
+                                let lon = coord.lon;
+                                // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                                if (lon > 180) {
+                                    lon = lon - 360;
+                                }
+                                return [lat, lon];
+                            })
                             .filter(coord => {
                                 const lat = coord[0];
                                 const lon = coord[1];
@@ -571,14 +625,25 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2) {
     if (Array.isArray(geojson)) {
         geojson.forEach((coords) => {
             if (coords && coords.length > 0) {
-                // Фильтруем валидные координаты
-                const validCoords = coords.filter(coord => {
-                    if (!Array.isArray(coord) || coord.length < 2) return false;
-                    const lat = coord[0];
-                    const lon = coord[1];
-                    return !isNaN(lat) && !isNaN(lon) && isFinite(lat) && isFinite(lon) &&
-                           lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
-                });
+                // Фильтруем и нормализуем валидные координаты (для восточных частей)
+                const validCoords = coords
+                    .map(coord => {
+                        if (!Array.isArray(coord) || coord.length < 2) return null;
+                        let lat = coord[0];
+                        let lon = coord[1];
+                        // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                        if (lon > 180) {
+                            lon = lon - 360;
+                        }
+                        return [lat, lon];
+                    })
+                    .filter(coord => {
+                        if (!coord) return false;
+                        const lat = coord[0];
+                        const lon = coord[1];
+                        return !isNaN(lat) && !isNaN(lon) && isFinite(lat) && isFinite(lon) &&
+                               lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+                    });
                 
                 if (validCoords.length > 0) {
                     try {
@@ -603,26 +668,117 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2) {
     else if (geojson.type) {
         addDebugLog(`GeoJSON объект, тип: ${geojson.type}`, 'info');
         try {
-            const geoJsonLayer = L.geoJSON(geojson, {
-                style: {
-                    color: color,
-                    fillColor: color,
-                    fillOpacity: fillOpacity,
-                    weight: 3
+            // Для MultiPolygon обрабатываем каждый полигон отдельно, чтобы убедиться, что все отображаются
+            if (geojson.type === 'MultiPolygon' && geojson.coordinates) {
+                addDebugLog(`MultiPolygon с ${geojson.coordinates.length} полигонами, обрабатываем каждый отдельно`, 'info');
+                
+                geojson.coordinates.forEach((polygon, index) => {
+                    if (polygon && polygon[0] && polygon[0].length > 0) {
+                        try {
+                            // Нормализуем координаты для восточных частей (переход через линию перемены дат)
+                            // Если долгота > 180, преобразуем в отрицательные значения
+                            const normalizedPolygon = polygon.map(ring => 
+                                ring.map(coord => {
+                                    let lng = coord[0];
+                                    // Если долгота больше 180, преобразуем (например, 190° -> -170°)
+                                    if (lng > 180) {
+                                        lng = lng - 360;
+                                    }
+                                    return [lng, coord[1]]; // [lng, lat]
+                                })
+                            );
+                            
+                            // Создаем отдельный GeoJSON объект для каждого полигона
+                            const singlePolygon = {
+                                type: 'Polygon',
+                                coordinates: normalizedPolygon
+                            };
+                            
+                            const polygonLayer = L.geoJSON(singlePolygon, {
+                                style: {
+                                    color: color,
+                                    fillColor: color,
+                                    fillOpacity: fillOpacity,
+                                    weight: 3
+                                }
+                            });
+                            
+                            polygonLayer.addTo(map);
+                            boundaryLayers.push(polygonLayer);
+                            
+                            if (polygonLayer.getBounds) {
+                                const bounds = polygonLayer.getBounds();
+                                const sw = bounds.getSouthWest();
+                                const ne = bounds.getNorthEast();
+                                addDebugLog(`Полигон ${index} добавлен, границы: SW=[${sw.lat.toFixed(2)}, ${sw.lng.toFixed(2)}], NE=[${ne.lat.toFixed(2)}, ${ne.lng.toFixed(2)}]`, 'success');
+                            }
+                        } catch (e) {
+                            addDebugLog(`Ошибка при добавлении полигона ${index}: ${e.message}`, 'error');
+                        }
+                    }
+                });
+                
+                addDebugLog(`Всего добавлено полигонов: ${boundaryLayers.length}`, 'info');
+            } else if (geojson.type === 'Polygon' && geojson.coordinates) {
+                // Для обычного Polygon тоже нормализуем координаты
+                try {
+                    const normalizedPolygon = geojson.coordinates.map(ring => 
+                        ring.map(coord => {
+                            let lng = coord[0];
+                            if (lng > 180) {
+                                lng = lng - 360;
+                            }
+                            return [lng, coord[1]];
+                        })
+                    );
+                    
+                    const normalizedGeoJson = {
+                        type: 'Polygon',
+                        coordinates: normalizedPolygon
+                    };
+                    
+                    const geoJsonLayer = L.geoJSON(normalizedGeoJson, {
+                        style: {
+                            color: color,
+                            fillColor: color,
+                            fillOpacity: fillOpacity,
+                            weight: 3
+                        }
+                    });
+                    geoJsonLayer.addTo(map);
+                    boundaryLayers.push(geoJsonLayer);
+                    
+                    if (geoJsonLayer.getBounds) {
+                        const layerBounds = geoJsonLayer.getBounds();
+                        addDebugLog(`Polygon слой добавлен, границы: ${layerBounds.toBBoxString()}`, 'success');
+                    }
+                } catch (e) {
+                    addDebugLog(`Ошибка создания Polygon слоя: ${e.message}`, 'error');
                 }
-            });
-            geoJsonLayer.addTo(map);
-            boundaryLayers.push(geoJsonLayer);
-            
-            // Проверяем, что слой действительно добавлен и имеет границы
-            if (geoJsonLayer.getBounds) {
-                const layerBounds = geoJsonLayer.getBounds();
-                addDebugLog(`GeoJSON слой добавлен, границы: ${layerBounds.toBBoxString()}`, 'success');
             } else {
-                addDebugLog('GeoJSON слой добавлен, но getBounds недоступен', 'warn');
+                // Для обычных Polygon и других типов используем стандартный метод
+                const geoJsonLayer = L.geoJSON(geojson, {
+                    style: {
+                        color: color,
+                        fillColor: color,
+                        fillOpacity: fillOpacity,
+                        weight: 3
+                    }
+                });
+                geoJsonLayer.addTo(map);
+                boundaryLayers.push(geoJsonLayer);
+                
+                // Проверяем, что слой действительно добавлен и имеет границы
+                if (geoJsonLayer.getBounds) {
+                    const layerBounds = geoJsonLayer.getBounds();
+                    addDebugLog(`GeoJSON слой добавлен, границы: ${layerBounds.toBBoxString()}`, 'success');
+                } else {
+                    addDebugLog('GeoJSON слой добавлен, но getBounds недоступен', 'warn');
+                }
             }
         } catch (e) {
             addDebugLog(`Ошибка создания GeoJSON слоя: ${e.message}`, 'error');
+            addDebugLog(`Стек ошибки: ${e.stack}`, 'error');
         }
     } else {
         addDebugLog(`Неизвестный формат данных границ: ${JSON.stringify(geojson).substring(0, 100)}`, 'warn');
@@ -841,7 +997,14 @@ function fitToBounds(coordinates, padding = 0) {
             });
         } else if (coordinates.type === 'Polygon' && coordinates.coordinates) {
             allCoords = coordinates.coordinates[0]
-                .map(c => [c[1], c[0]])
+                .map(c => {
+                    let lng = c[0];
+                    // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                    if (lng > 180) {
+                        lng = lng - 360;
+                    }
+                    return [c[1], lng]; // [lat, lng]
+                })
                 .filter(coord => {
                     const lat = coord[0];
                     const lon = coord[1];
@@ -851,7 +1014,14 @@ function fitToBounds(coordinates, padding = 0) {
         } else if (coordinates.type === 'MultiPolygon' && coordinates.coordinates) {
             coordinates.coordinates.forEach(polygon => {
                 const polygonCoords = polygon[0]
-                    .map(c => [c[1], c[0]])
+                    .map(c => {
+                        let lng = c[0];
+                        // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                        if (lng > 180) {
+                            lng = lng - 360;
+                        }
+                        return [c[1], lng]; // [lat, lng]
+                    })
                     .filter(coord => {
                         const lat = coord[0];
                         const lon = coord[1];
@@ -941,43 +1111,101 @@ async function init() {
                 // Устанавливаем вид на Россию
                 safeSetView(61.5240, 105.3188, 4);
                 
-                // Пробуем получить границы России через Nominatim (более надежно)
+                // Для России сначала пробуем Nominatim (быстрее), затем Overpass если нужно
                 addDebugLog('Шаг 1: Пробуем получить границы России через Nominatim', 'info');
                 let boundary = await getBoundaryByQuery('Россия');
                 
-                // Если не получили через Nominatim, пробуем через Overpass
-                if (!boundary) {
-                    addDebugLog('Шаг 2: Пробуем получить границы России через Overpass', 'info');
+                // Проверяем полноту данных от Nominatim
+                let needsOverpass = false;
+                if (boundary && boundary.type === 'MultiPolygon' && boundary.coordinates) {
+                    addDebugLog(`Получен MultiPolygon с ${boundary.coordinates.length} полигонами`, 'info');
+                    // Проверяем, есть ли восточные части (Чукотка)
+                    let hasEasternParts = false;
+                    boundary.coordinates.forEach((polygon, index) => {
+                        if (polygon && polygon[0] && polygon[0].length > 0) {
+                            const coords = polygon[0];
+                            let minLng = Infinity, maxLng = -Infinity;
+                            coords.forEach(coord => {
+                                const lng = coord[0];
+                                if (lng < minLng) minLng = lng;
+                                if (lng > maxLng) maxLng = lng;
+                            });
+                            // Чукотка находится примерно на 169-180°E
+                            if (minLng >= 165 || maxLng >= 165) {
+                                hasEasternParts = true;
+                                addDebugLog(`Полигон ${index} содержит восточные части (lng: ${minLng.toFixed(2)}-${maxLng.toFixed(2)})`, 'info');
+                            }
+                        }
+                    });
+                    if (!hasEasternParts) {
+                        addDebugLog('Восточные части (Чукотка) не найдены в Nominatim, пробуем Overpass', 'warn');
+                        needsOverpass = true;
+                        boundary = null;
+                    }
+                } else if (!boundary) {
+                    needsOverpass = true;
+                }
+                
+                // Если нужно, пробуем Overpass
+                if (needsOverpass) {
+                    addDebugLog('Шаг 2: Пробуем получить границы России через Overpass API', 'info');
                     let errorOccurred = false;
                     
                     try {
+                        // Используем OSM ID России напрямую (60199)
+                        // Уменьшаем timeout до 20 секунд
                         const russiaQuery = `
-                            [out:json][timeout:25];
-                            relation["name"="Россия"]["type"="boundary"]["admin_level"="2"];
+                            [out:json][timeout:20];
+                            relation(60199);
                             (._;>;);
                             out geom;
                         `;
-                        const response = await fetch('https://overpass-api.de/api/interpreter', {
-                            method: 'POST',
-                            body: russiaQuery,
-                            headers: { 'Content-Type': 'text/plain' }
-                        });
+                        addDebugLog('Отправляем запрос к Overpass API для России по OSM ID 60199', 'info');
+                    
+                    // Добавляем таймаут для запроса (15 секунд)
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => {
+                        controller.abort();
+                        addDebugLog('Запрос к Overpass API превысил таймаут', 'warn');
+                    }, 15000);
+                    
+                    const response = await fetch('https://overpass-api.de/api/interpreter', {
+                        method: 'POST',
+                        body: russiaQuery,
+                        headers: { 'Content-Type': 'text/plain' },
+                        signal: controller.signal
+                    });
+                    
+                    clearTimeout(timeoutId);
                         
                         if (response.ok) {
                             const data = await response.json();
+                            addDebugLog(`Overpass вернул ${data.elements ? data.elements.length : 0} элементов`, 'info');
+                            
                             if (data.elements && data.elements.length > 0) {
                                 const relation = data.elements.find(el => el.type === 'relation');
                                 if (relation && relation.members) {
+                                    addDebugLog(`Найдена relation с ${relation.members.length} members`, 'info');
                                     const outerWays = relation.members.filter(m => 
                                         (m.role === 'outer' || m.role === '') && m.geometry
                                     );
+                                    addDebugLog(`Найдено ${outerWays.length} outer ways с геометрией`, 'info');
+                                    
                                     if (outerWays.length > 0) {
                                         const coordinates = [];
                                         for (const member of outerWays) {
                                             if (member.geometry && member.geometry.length > 0) {
-                                                // Фильтруем валидные координаты
+                                                // Фильтруем и нормализуем координаты (для восточных частей)
                                                 const validCoords = member.geometry
-                                                    .map(coord => [coord.lat, coord.lon])
+                                                    .map(coord => {
+                                                        let lat = coord.lat;
+                                                        let lon = coord.lon;
+                                                        // Нормализуем долготу: если > 180, преобразуем в отрицательные
+                                                        if (lon > 180) {
+                                                            lon = lon - 360;
+                                                        }
+                                                        return [lat, lon];
+                                                    })
                                                     .filter(coord => {
                                                         const lat = coord[0];
                                                         const lon = coord[1];
@@ -986,9 +1214,20 @@ async function init() {
                                                     });
                                                 if (validCoords.length > 0) {
                                                     coordinates.push(validCoords);
+                                                    
+                                                    // Проверяем, есть ли восточные части в этом way
+                                                    let minLng = Infinity, maxLng = -Infinity;
+                                                    validCoords.forEach(coord => {
+                                                        if (coord[1] < minLng) minLng = coord[1];
+                                                        if (coord[1] > maxLng) maxLng = coord[1];
+                                                    });
+                                                    if (minLng >= 165 || maxLng >= 165) {
+                                                        addDebugLog(`Way содержит восточные части (lng: ${minLng.toFixed(2)}-${maxLng.toFixed(2)})`, 'info');
+                                                    }
                                                 }
                                             }
                                         }
+                                        addDebugLog(`Собрано ${coordinates.length} полигонов из Overpass`, 'info');
                                         boundary = coordinates.length > 0 ? coordinates : null;
                                     }
                                 }
@@ -998,11 +1237,50 @@ async function init() {
                             errorOccurred = true;
                         }
                     } catch (e) {
+                        clearTimeout(timeoutId);
                         addDebugLog(`Ошибка получения границ России: ${e.message}`, 'error');
                         errorOccurred = true;
-                        // Если это CORS ошибка, показываем предупреждение
-                        if (e.message && (e.message.includes('CORS') || e.message.includes('Failed to fetch'))) {
+                        // Если это таймаут или CORS ошибка
+                        if (e.name === 'AbortError' || e.message.includes('timeout')) {
+                            addDebugLog('Запрос к Overpass API превысил таймаут, переходим к Nominatim', 'warn');
+                        } else if (e.message && (e.message.includes('CORS') || e.message.includes('Failed to fetch'))) {
                             addDebugLog('CORS ошибка. Для работы с API рекомендуется использовать локальный сервер.', 'warn');
+                        }
+                    }
+                }
+                
+                // Если не получили через Overpass, пробуем через Nominatim
+                if (!boundary) {
+                    addDebugLog('Шаг 2: Пробуем получить границы России через Nominatim', 'info');
+                    boundary = await getBoundaryByQuery('Россия');
+                    
+                    // Если получили через Nominatim, проверяем полноту данных
+                    if (boundary) {
+                        if (boundary.type === 'MultiPolygon' && boundary.coordinates) {
+                            addDebugLog(`Получен MultiPolygon с ${boundary.coordinates.length} полигонами`, 'info');
+                            // Проверяем, есть ли восточные части (Чукотка)
+                            let hasEasternParts = false;
+                            boundary.coordinates.forEach((polygon, index) => {
+                                if (polygon && polygon[0] && polygon[0].length > 0) {
+                                    const coords = polygon[0];
+                                    let minLng = Infinity, maxLng = -Infinity;
+                                    coords.forEach(coord => {
+                                        const lng = coord[0];
+                                        if (lng < minLng) minLng = lng;
+                                        if (lng > maxLng) maxLng = lng;
+                                    });
+                                    // Чукотка находится примерно на 169-180°E
+                                    if (minLng >= 165 || maxLng >= 165) {
+                                        hasEasternParts = true;
+                                        addDebugLog(`Полигон ${index} содержит восточные части (lng: ${minLng.toFixed(2)}-${maxLng.toFixed(2)})`, 'info');
+                                    }
+                                }
+                            });
+                            if (!hasEasternParts) {
+                                addDebugLog('ВНИМАНИЕ: Восточные части (Чукотка) не найдены в данных Nominatim! Пробуем Overpass снова.', 'warn');
+                                // Пробуем Overpass еще раз
+                                boundary = null;
+                            }
                         }
                     }
                 }
@@ -1042,11 +1320,12 @@ async function init() {
                                 const area = (maxLat - minLat) * (maxLng - minLng);
                                 addDebugLog(`Полигон ${index}: площадь=${area.toFixed(2)}, SW=[${minLat.toFixed(2)}, ${minLng.toFixed(2)}], NE=[${maxLat.toFixed(2)}, ${maxLng.toFixed(2)}]`, 'info');
                                 
-                                // Игнорируем полигоны, которые явно не основная часть России
-                                // Калининград: примерно 54.7°N, 20.5°E
+                                // Игнорируем только Калининград (маленький полигон в западной Европе)
+                                // Калининград: примерно 54.7°N, 20.5°E, очень маленький по площади
                                 // Основная часть России начинается примерно с 19°E
-                                if (minLng > 18 && maxLng < 25) {
-                                    addDebugLog(`Полигон ${index} пропущен для масштабирования (вероятно Калининград)`, 'info');
+                                // Чукотка находится на востоке (примерно 64-71°N, 169-180°E), не фильтруем её
+                                if (minLng > 18 && maxLng < 25 && area < 1.0) {
+                                    addDebugLog(`Полигон ${index} пропущен для масштабирования (вероятно Калининград, площадь=${area.toFixed(2)})`, 'info');
                                     return;
                                 }
                                 
@@ -1178,12 +1457,19 @@ async function init() {
         }
         // Случай 2: country + city
         else if (params.city) {
+            addDebugLog(`Обработка города: ${params.city}`, 'info');
             const cityData = await geocode(params.city, params.country);
             if (cityData) {
+                addDebugLog(`Данные города получены: lat=${cityData.lat}, lon=${cityData.lon}`, 'info');
                 const boundary = await getBoundaryByQuery(params.city, params.country);
                 if (boundary) {
+                    addDebugLog('Границы города найдены, отображаем на карте', 'success');
                     displayBoundary(boundary, '#ff6b6b', 0.3);
-                    fitToBounds(boundary, 0.5); // 50% padding
+                    // Ждем немного, чтобы слои успели добавиться, затем масштабируем
+                    setTimeout(() => {
+                        addDebugLog('Вызываем fitToBounds для города', 'info');
+                        fitToBounds(null, 0.5); // 50% padding, используем границы слоев
+                    }, 200);
                 } else {
                     // Если границы не найдены, показываем страну и ошибку
                     const countryData = await geocode(params.country);
@@ -1217,12 +1503,19 @@ async function init() {
         }
         // Случай 3: country + region
         else if (params.region) {
+            addDebugLog(`Обработка региона: ${params.region}`, 'info');
             const regionData = await geocode(params.region, params.country);
             if (regionData) {
+                addDebugLog(`Данные региона получены: lat=${regionData.lat}, lon=${regionData.lon}`, 'info');
                 const boundary = await getBoundaryByQuery(params.region, params.country);
                 if (boundary) {
+                    addDebugLog('Границы региона найдены, отображаем на карте', 'success');
                     displayBoundary(boundary, '#51cf66', 0.25);
-                    fitToBounds(boundary, 0.6); // 60% padding
+                    // Ждем немного, чтобы слои успели добавиться, затем масштабируем
+                    setTimeout(() => {
+                        addDebugLog('Вызываем fitToBounds для региона', 'info');
+                        fitToBounds(null, 0.6); // 60% padding, используем границы слоев
+                    }, 200);
                 } else {
                     // Если границы не найдены, показываем страну и ошибку
                     const countryData = await geocode(params.country);
