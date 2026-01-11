@@ -405,12 +405,15 @@ function getAlternativeCountryNames(query) {
 // Функция для получения границ через альтернативный метод (используя Nominatim для получения OSM ID)
 async function getBoundaryByQuery(query, country = 'Россия') {
     // Для стран используем только query без country в запросе
-    const fullQuery = query;
+    // Для городов добавляем страну в запрос для более точного поиска
+    const fullQuery = country && country !== 'Россия' ? `${query}, ${country}` : query;
+    
+    addDebugLog(`getBoundaryByQuery: query="${query}", country="${country}", fullQuery="${fullQuery}"`, 'info');
     
     // Сначала пробуем получить через Nominatim с polygon_geojson
     // Используем polygon_kml=1 для более детальных данных, или polygon_geojson=1
     // Для стран лучше использовать polygon_geojson=1 без упрощения
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(fullQuery)}&format=json&limit=1&accept-language=ru&polygon_geojson=1&addressdetails=1&extratags=1`;
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(fullQuery)}&format=json&limit=5&accept-language=ru&polygon_geojson=1&addressdetails=1&extratags=1`;
     
     try {
         const response = await fetch(url, {
@@ -428,18 +431,41 @@ async function getBoundaryByQuery(query, country = 'Россия') {
         
         if (data && data.length > 0) {
             console.log('Данные от Nominatim:', data[0]);
-            addDebugLog(`Nominatim вернул данные: type=${data[0].osm_type}, id=${data[0].osm_id}`, 'info');
+            addDebugLog(`Nominatim вернул ${data.length} результатов`, 'info');
+            addDebugLog(`Первый результат: type=${data[0].osm_type}, id=${data[0].osm_id}, display_name=${data[0].display_name}`, 'info');
+            
+            // Для городов проверяем все результаты и выбираем наиболее подходящий
+            let selectedItem = data[0];
+            if (country && country !== 'Россия') {
+                // Ищем результат с place=city или place=town, или с координатами близкими к ожидаемым
+                for (const item of data) {
+                    const extratags = item.extratags || {};
+                    const place = extratags.place || '';
+                    if (place === 'city' || place === 'town') {
+                        addDebugLog(`Найден результат с place=${place}: ${item.display_name}`, 'info');
+                        selectedItem = item;
+                        break;
+                    }
+                }
+            }
+            
+            addDebugLog(`Используем результат: ${selectedItem.display_name}, OSM ID=${selectedItem.osm_id}`, 'info');
             
             // Если есть geojson напрямую
-            if (data[0].geojson) {
+            if (selectedItem.geojson) {
                 console.log('Найден GeoJSON в Nominatim');
                 addDebugLog(`GeoJSON найден в Nominatim, тип: ${data[0].geojson.type}`, 'info');
                 
+                // Проверяем extratags для определения типа места
+                const extratags = selectedItem.extratags || {};
+                const place = extratags.place || selectedItem.type || '';
+                addDebugLog(`Place type: ${place}, extratags: ${JSON.stringify(extratags)}`, 'info');
+                
                 // Если это Point, значит Nominatim вернул только точку, нужно искать границы через Overpass
-                if (data[0].geojson.type === 'Point') {
+                if (selectedItem.geojson.type === 'Point') {
                     addDebugLog('Nominatim вернул только точку (Point), ищем границы через Overpass', 'info');
-                    const osmId = data[0].osm_id;
-                    const osmType = data[0].osm_type;
+                    const osmId = selectedItem.osm_id;
+                    const osmType = selectedItem.osm_type;
                     
                     // Для node (Point) используем Overpass для поиска административных границ
                     if (osmType === 'node') {
@@ -466,15 +492,134 @@ async function getBoundaryByQuery(query, country = 'Россия') {
                     return null;
                 }
                 
-                if (data[0].geojson.type === 'MultiPolygon') {
-                    addDebugLog(`MultiPolygon содержит ${data[0].geojson.coordinates ? data[0].geojson.coordinates.length : 0} полигонов`, 'info');
+                // Если это Polygon или MultiPolygon, возвращаем его (даже если place=province, это может быть правильный результат для больших городов)
+                if (selectedItem.geojson.type === 'MultiPolygon' || selectedItem.geojson.type === 'Polygon') {
+                    if (selectedItem.geojson.type === 'MultiPolygon') {
+                        const polygonCount = selectedItem.geojson.coordinates ? selectedItem.geojson.coordinates.length : 0;
+                        addDebugLog(`MultiPolygon содержит ${polygonCount} полигонов`, 'info');
+                        addDebugLog(`Проверка фильтрации: country="${country}", polygonCount=${polygonCount}`, 'info');
+                        
+                        // Для городов, если MultiPolygon содержит много полигонов, возможно это включает удаленные острова
+                        // Фильтруем полигоны - оставляем только самый большой (основную часть города)
+                        // Проверяем, что это не страна (country не пустой и не Россия) и есть несколько полигонов
+                        const shouldFilter = country && country.trim() !== '' && country !== 'Россия' && polygonCount > 1;
+                        addDebugLog(`Должна ли применяться фильтрация: ${shouldFilter}`, 'info');
+                        
+                        if (shouldFilter) {
+                            const cityLat = parseFloat(selectedItem.lat);
+                            const cityLon = parseFloat(selectedItem.lon);
+                            
+                            if (!isNaN(cityLat) && !isNaN(cityLon)) {
+                                addDebugLog(`Фильтруем полигоны для города [${cityLat}, ${cityLon}]`, 'info');
+                                const polygonInfo = [];
+                                
+                                // Собираем информацию о каждом полигоне
+                                for (let i = 0; i < selectedItem.geojson.coordinates.length; i++) {
+                                    const polygon = selectedItem.geojson.coordinates[i];
+                                    // В MultiPolygon каждый элемент - это массив колец: [[[lon, lat], ...], ...]
+                                    // polygon[0] - это внешнее кольцо
+                                    if (polygon && Array.isArray(polygon) && polygon[0] && Array.isArray(polygon[0]) && polygon[0].length > 0) {
+                                        // Находим границы и центр полигона
+                                        let minLat = Infinity, maxLat = -Infinity;
+                                        let minLon = Infinity, maxLon = -Infinity;
+                                        
+                                        for (const coord of polygon[0]) {
+                                            // В GeoJSON координаты идут как [lon, lat]
+                                            const lon = coord[0] > 180 ? coord[0] - 360 : coord[0];
+                                            const lat = coord[1];
+                                            if (lat < minLat) minLat = lat;
+                                            if (lat > maxLat) maxLat = lat;
+                                            if (lon < minLon) minLon = lon;
+                                            if (lon > maxLon) maxLon = lon;
+                                        }
+                                        
+                                        const centerLat = (minLat + maxLat) / 2;
+                                        const centerLon = (minLon + maxLon) / 2;
+                                        const latSize = maxLat - minLat;
+                                        const lonSize = maxLon - minLon;
+                                        const area = latSize * lonSize; // Примерная площадь
+                                        
+                                        // Вычисляем расстояние от центра города до центра полигона
+                                        const latDiff = Math.abs(centerLat - cityLat);
+                                        const lonDiff = Math.abs(centerLon - cityLon);
+                                        const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
+                                        
+                                        polygonInfo.push({
+                                            index: i,
+                                            polygon: polygon,
+                                            centerLat: centerLat,
+                                            centerLon: centerLon,
+                                            area: area,
+                                            distance: distance
+                                        });
+                                        
+                                        addDebugLog(`Полигон ${i}: центр [${centerLat.toFixed(2)}, ${centerLon.toFixed(2)}], размер [${latSize.toFixed(2)}, ${lonSize.toFixed(2)}], площадь ${area.toFixed(4)}, расстояние ${distance.toFixed(2)}°`, 'info');
+                                    }
+                                }
+                                
+                                // Для городов с MultiPolygon, содержащим много полигонов (например, Токио с островами),
+                                // сохраняем информацию о центре города для фильтрации при отображении
+                                // Пока возвращаем оригинальный MultiPolygon, фильтрация будет в displayBoundary
+                                addDebugLog('MultiPolygon содержит несколько полигонов, фильтрация будет применена при отображении', 'info');
+                                return selectedItem.geojson;
+                                
+                                // Исключаем все остальные полигоны
+                                for (let i = 1; i < polygonInfo.length; i++) {
+                                    const info = polygonInfo[i];
+                                    addDebugLog(`Полигон ${info.index} исключен: расстояние ${info.distance.toFixed(2)}°, площадь ${info.area.toFixed(4)}`, 'warn');
+                                }
+                                
+                                addDebugLog(`После фильтрации остался 1 из ${polygonCount} полигонов (основная часть города)`, 'info');
+                                
+                                // Создаем новый Polygon (не MultiPolygon) с основным полигоном
+                                // В MultiPolygon координаты идут как [[[lon, lat], ...]], в Polygon как [[lon, lat], ...]
+                                // mainPolygon.polygon уже в правильном формате для Polygon (это polygon из MultiPolygon, который является массивом колец)
+                                let polygonCoords = mainPolygon.polygon;
+                                
+                                // Проверяем формат
+                                if (!Array.isArray(polygonCoords)) {
+                                    addDebugLog('ОШИБКА: polygonCoords не массив!', 'error');
+                                    // Возвращаем оригинальный MultiPolygon, но только с одним полигоном
+                                    return {
+                                        type: 'MultiPolygon',
+                                        coordinates: [mainPolygon.polygon]
+                                    };
+                                }
+                                
+                                if (!Array.isArray(polygonCoords[0])) {
+                                    addDebugLog('ОШИБКА: polygonCoords[0] не массив!', 'error');
+                                    // Возвращаем оригинальный MultiPolygon, но только с одним полигоном
+                                    return {
+                                        type: 'MultiPolygon',
+                                        coordinates: [mainPolygon.polygon]
+                                    };
+                                }
+                                
+                                addDebugLog(`Формат координат проверен: OK, точек в первом кольце: ${polygonCoords[0] ? polygonCoords[0].length : 0}`, 'info');
+                                
+                                const filteredGeoJson = {
+                                    type: 'Polygon',
+                                    coordinates: polygonCoords
+                                };
+                                addDebugLog(`Создан Polygon, возвращаем его`, 'success');
+                                return filteredGeoJson;
+                            }
+                        }
+                    }
+                    // Для городов проверяем, что это не слишком большая административная единица
+                    // Если place=province, но это может быть правильный результат для больших городов типа Токио
+                    if (place === 'province' && country) {
+                        addDebugLog(`Найден результат с place=province, но это может быть правильный результат для большого города`, 'info');
+                        // Проверяем, что это не слишком далеко от ожидаемых координат (для Токио это нормально)
+                    }
+                    addDebugLog(`Возвращаем GeoJSON от Nominatim: ${selectedItem.geojson.type}`, 'success');
+                    return selectedItem.geojson;
                 }
-                return data[0].geojson;
             }
             
             // Пробуем получить через OSM ID
-            const osmId = data[0].osm_id;
-            const osmType = data[0].osm_type;
+            const osmId = selectedItem.osm_id;
+            const osmType = selectedItem.osm_type;
             
             console.log('OSM ID:', osmId, 'OSM Type:', osmType);
             addDebugLog(`OSM ID: ${osmId}, OSM Type: ${osmType}`, 'info');
@@ -551,8 +696,27 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
         const adminLevelPattern = isCountry ? '"admin_level"="2"' : '"admin_level"~"^[4-8]$"';
         
         // Пробуем найти административную единицу по имени
-        // Для городов также ищем по place=city, place=town, place=borough
-        let simpleQuery = `
+        // Для городов приоритет - поиск по place=city, place=town
+        let simpleQuery = '';
+        
+        if (!isCountry) {
+            // Для городов сначала ищем по place тегам (это более точно для городов)
+            simpleQuery = `
+            [out:json][timeout:25];
+            (
+              relation["name"="${query}"]["place"~"^(city|town)$"]["boundary"="administrative"];
+              relation["name:ru"="${query}"]["place"~"^(city|town)$"]["boundary"="administrative"];
+              relation["name:en"="${query}"]["place"~"^(city|town)$"]["boundary"="administrative"];
+              relation["name:ja"="${query}"]["place"~"^(city|town)$"]["boundary"="administrative"];
+              relation["name"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
+              relation["name:ru"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
+              relation["name:en"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
+              relation["name:ja"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
+              relation["alt_name"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
+        `;
+        } else {
+            // Для стран ищем только по boundary
+            simpleQuery = `
             [out:json][timeout:25];
             (
               relation["name"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
@@ -560,14 +724,6 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
               relation["alt_name"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
               relation["name:en"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
         `;
-        
-        // Если это не страна, добавляем поиск по place тегам
-        if (!isCountry) {
-            simpleQuery += `
-              relation["name"="${query}"]["place"~"^(city|town|borough|municipality)$"][${adminLevelPattern}];
-              relation["name:ru"="${query}"]["place"~"^(city|town|borough|municipality)$"][${adminLevelPattern}];
-              relation["name:en"="${query}"]["place"~"^(city|town|borough|municipality)$"][${adminLevelPattern}];
-            `;
         }
         
         // Добавляем поиск по названию на языке страны, если указана страна
@@ -575,8 +731,13 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
             // Для разных стран используем соответствующие языковые теги
             if (country === 'Швеция' || country === 'Sweden') {
                 simpleQuery += `
+              relation["name:sv"="${query}"]["place"~"^(city|town)$"]["boundary"="administrative"];
               relation["name:sv"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
-              relation["name:sv"="${query}"]["place"~"^(city|town|borough|municipality)$"][${adminLevelPattern}];
+            `;
+            } else if (country === 'Япония' || country === 'Japan') {
+                simpleQuery += `
+              relation["name:ja"="${query}"]["place"~"^(city|town)$"]["boundary"="administrative"];
+              relation["name:ja"="${query}"]["boundary"="administrative"][${adminLevelPattern}];
             `;
             }
         }
@@ -608,8 +769,31 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
         
         if (data.elements && data.elements.length > 0) {
             console.log('Найдено элементов:', data.elements.length);
-            // Ищем relation с границами
-            const relation = data.elements.find(el => el.type === 'relation');
+            
+            // Если это не страна, приоритет - relation с place=city или place=town
+            let relation = null;
+            if (!isCountry) {
+                // Сначала ищем city
+                relation = data.elements.find(el => 
+                    el.type === 'relation' && 
+                    el.tags && 
+                    (el.tags.place === 'city' || el.tags.place === 'town')
+                );
+                // Если не нашли city, ищем town
+                if (!relation) {
+                    relation = data.elements.find(el => 
+                        el.type === 'relation' && 
+                        el.tags && 
+                        el.tags.place === 'town'
+                    );
+                }
+            }
+            
+            // Если не нашли по place, ищем любую relation
+            if (!relation) {
+                relation = data.elements.find(el => el.type === 'relation');
+            }
+            
             if (relation && relation.members) {
                 // Собираем все outer ways
                 const outerWays = relation.members.filter(m => 
@@ -672,18 +856,122 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
                                 return !isNaN(lat) && !isNaN(lon) && isFinite(lat) && isFinite(lon) &&
                                        lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
                             });
-                        if (validCoords.length > 0) {
+                        // Проверяем, что это действительно полигон (минимум 3 точки)
+                        if (validCoords.length >= 3) {
                             coordinates.push(validCoords);
+                        } else {
+                            addDebugLog(`Пропущен way с недостаточным количеством точек: ${validCoords.length}`, 'warn');
                         }
                     }
                 });
                 return coordinates.length > 0 ? coordinates : null;
+            }
+            
+            // Если не нашли relation или ways, но есть nodes - это не границы, пропускаем
+            const nodes = data.elements.filter(el => el.type === 'node');
+            if (nodes.length > 0 && !relation) {
+                addDebugLog(`Найдены только nodes (${nodes.length}), но не границы. Пропускаем.`, 'warn');
             }
         }
         
         return null;
     } catch (error) {
         console.error('Ошибка Overpass запроса:', error);
+        return null;
+    }
+}
+
+// Функция для поиска границ города через Overpass с использованием координат
+async function getBoundaryByOverpassWithCoords(lat, lon, cityName, country = 'Россия') {
+    const overpassUrl = 'https://overpass-api.de/api/interpreter';
+    
+    try {
+        // Ищем административные границы в радиусе 0.1 градуса от координат города
+        // Приоритет - place=city, затем place=town
+        const query = `
+            [out:json][timeout:25];
+            (
+              relation(around:5000,${lat},${lon})["place"~"^(city|town)$"]["boundary"="administrative"];
+              relation(around:10000,${lat},${lon})["name"="${cityName}"]["boundary"="administrative"]["admin_level"~"^[4-8]$"];
+              relation(around:10000,${lat},${lon})["name:en"="${cityName}"]["boundary"="administrative"]["admin_level"~"^[4-8]$"];
+              relation(around:10000,${lat},${lon})["name:ru"="${cityName}"]["boundary"="administrative"]["admin_level"~"^[4-8]$"];
+            );
+            (._;>;);
+            out geom;
+        `;
+        
+        addDebugLog(`Overpass запрос для города ${cityName} по координатам [${lat}, ${lon}]`, 'info');
+        
+        const response = await fetch(overpassUrl, {
+            method: 'POST',
+            body: query,
+            headers: {
+                'Content-Type': 'text/plain'
+            }
+        });
+        
+        if (!response.ok) {
+            console.error('Overpass API вернул ошибку:', response.status);
+            return null;
+        }
+        
+        const data = await response.json();
+        
+        if (data.elements && data.elements.length > 0) {
+            addDebugLog(`Найдено ${data.elements.length} элементов в радиусе от координат`, 'info');
+            
+            // Приоритет - relation с place=city или place=town
+            let relation = data.elements.find(el => 
+                el.type === 'relation' && 
+                el.tags && 
+                (el.tags.place === 'city' || el.tags.place === 'town')
+            );
+            
+            // Если не нашли по place, ищем любую relation
+            if (!relation) {
+                relation = data.elements.find(el => el.type === 'relation');
+            }
+            
+            if (relation && relation.members) {
+                const outerWays = relation.members.filter(m => 
+                    (m.role === 'outer' || m.role === '') && m.geometry
+                );
+                
+                if (outerWays.length > 0) {
+                    const coordinates = [];
+                    for (const member of outerWays) {
+                        if (member.geometry && member.geometry.length > 0) {
+                            const validCoords = member.geometry
+                                .map(coord => {
+                                    let lat = coord.lat;
+                                    let lon = coord.lon;
+                                    if (lon > 180) {
+                                        lon = lon - 360;
+                                    }
+                                    return [lat, lon];
+                                })
+                                .filter(coord => {
+                                    const lat = coord[0];
+                                    const lon = coord[1];
+                                    return !isNaN(lat) && !isNaN(lon) && isFinite(lat) && isFinite(lon) &&
+                                           lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+                                });
+                            if (validCoords.length >= 3) {
+                                coordinates.push(validCoords);
+                            }
+                        }
+                    }
+                    if (coordinates.length > 0) {
+                        addDebugLog(`Границы города найдены через Overpass по координатам, полигонов: ${coordinates.length}`, 'success');
+                        return coordinates;
+                    }
+                }
+            }
+        }
+        
+        return null;
+    } catch (error) {
+        console.error('Ошибка Overpass запроса по координатам:', error);
         return null;
     }
 }
@@ -1045,7 +1333,16 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
     
     // Если это массив координат
     if (Array.isArray(geojson)) {
-        geojson.forEach((coords) => {
+        // Если массив содержит несколько полигонов и это может быть город с островами,
+        // фильтруем полигоны по размеру и расстоянию от центра (если есть контекст)
+        let polygonsToDisplay = geojson;
+        
+        if (geojson.length > 1) {
+            addDebugLog(`Массив содержит ${geojson.length} полигонов, проверяем необходимость фильтрации`, 'info');
+            // Пока оставляем все полигоны, фильтрация будет применена позже при необходимости
+        }
+        
+        polygonsToDisplay.forEach((coords, index) => {
             if (coords && coords.length > 0) {
                 // Фильтруем и нормализуем валидные координаты (для восточных частей)
                 const validCoords = coords
@@ -1068,6 +1365,12 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
                     });
                 
                 if (validCoords.length > 0) {
+                    // Проверяем, что это действительно полигон (минимум 3 точки для замкнутого полигона)
+                    if (validCoords.length < 3) {
+                        addDebugLog(`Пропущены координаты полигона ${index}: недостаточно точек (${validCoords.length} < 3)`, 'warn');
+                        return; // Пропускаем, если недостаточно точек
+                    }
+                    
                     try {
                         const polygon = L.polygon(validCoords, {
                             color: color,
@@ -1077,9 +1380,9 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
                         });
                         polygon.addTo(map);
                         boundaryLayers.push(polygon);
-                        addDebugLog(`Полигон добавлен, точек: ${validCoords.length}`, 'success');
+                        addDebugLog(`Полигон ${index} добавлен, точек: ${validCoords.length}`, 'success');
                     } catch (e) {
-                        addDebugLog(`Ошибка создания полигона: ${e.message}`, 'error');
+                        addDebugLog(`Ошибка создания полигона ${index}: ${e.message}`, 'error');
                     }
                 }
             }
@@ -1093,6 +1396,36 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
             // Для MultiPolygon обрабатываем каждый полигон отдельно, чтобы убедиться, что все отображаются
             if (geojson.type === 'MultiPolygon' && geojson.coordinates) {
                 addDebugLog(`MultiPolygon с ${geojson.coordinates.length} полигонами, обрабатываем каждый отдельно`, 'info');
+                
+                // Если много полигонов (больше 3), возможно это город с удаленными островами
+                // Находим центр самого большого полигона для фильтрации
+                let mainCenterLat = null, mainCenterLon = null;
+                if (geojson.coordinates.length > 3) {
+                    let maxArea = 0;
+                    geojson.coordinates.forEach(polygon => {
+                        if (polygon && polygon[0] && polygon[0].length > 0) {
+                            let minLat = Infinity, maxLat = -Infinity;
+                            let minLon = Infinity, maxLon = -Infinity;
+                            polygon[0].forEach(coord => {
+                                const lon = coord[0] > 180 ? coord[0] - 360 : coord[0];
+                                const lat = coord[1];
+                                if (lat < minLat) minLat = lat;
+                                if (lat > maxLat) maxLat = lat;
+                                if (lon < minLon) minLon = lon;
+                                if (lon > maxLon) maxLon = lon;
+                            });
+                            const area = (maxLat - minLat) * (maxLon - minLon);
+                            if (area > maxArea) {
+                                maxArea = area;
+                                mainCenterLat = (minLat + maxLat) / 2;
+                                mainCenterLon = (minLon + maxLon) / 2;
+                            }
+                        }
+                    });
+                    if (mainCenterLat !== null) {
+                        addDebugLog(`Центр самого большого полигона: [${mainCenterLat.toFixed(2)}, ${mainCenterLon.toFixed(2)}]`, 'info');
+                    }
+                }
                 
                 geojson.coordinates.forEach((polygon, index) => {
                     if (polygon && polygon[0] && polygon[0].length > 0) {
@@ -1109,6 +1442,33 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
                                     return [lng, coord[1]]; // [lng, lat]
                                 })
                             );
+                            
+                            // Если есть центр главного полигона и много полигонов, фильтруем по расстоянию
+                            if (mainCenterLat !== null && mainCenterLon !== null && geojson.coordinates.length > 3) {
+                                // Находим центр этого полигона
+                                let minLat = Infinity, maxLat = -Infinity;
+                                let minLon = Infinity, maxLon = -Infinity;
+                                normalizedPolygon[0].forEach(coord => {
+                                    const lat = coord[1];
+                                    const lon = coord[0];
+                                    if (lat < minLat) minLat = lat;
+                                    if (lat > maxLat) maxLat = lat;
+                                    if (lon < minLon) minLon = lon;
+                                    if (lon > maxLon) maxLon = lon;
+                                });
+                                const polyCenterLat = (minLat + maxLat) / 2;
+                                const polyCenterLon = (minLon + maxLon) / 2;
+                                const latDiff = Math.abs(polyCenterLat - mainCenterLat);
+                                const lonDiff = Math.abs(polyCenterLon - mainCenterLon);
+                                const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
+                                
+                                // Пропускаем полигоны, которые слишком далеко от главного (больше 2 градусов)
+                                if (distance > 2.0) {
+                                    addDebugLog(`Полигон ${index} пропущен: слишком далеко от главного (${distance.toFixed(2)}°)`, 'warn');
+                                    return;
+                                }
+                                addDebugLog(`Полигон ${index} включен: расстояние от главного ${distance.toFixed(2)}°`, 'info');
+                            }
                             
                             // Создаем отдельный GeoJSON объект для каждого полигона
                             const singlePolygon = {
@@ -1177,8 +1537,17 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
                 } catch (e) {
                     addDebugLog(`Ошибка создания Polygon слоя: ${e.message}`, 'error');
                 }
+            } else if (geojson.type === 'Point') {
+                // Если это Point, не отображаем как границы - это только точка
+                addDebugLog('Получен Point вместо границ, пропускаем отображение', 'warn');
             } else {
                 // Для обычных Polygon и других типов используем стандартный метод
+                // Проверяем, что это не Point
+                if (geojson.type === 'Point') {
+                    addDebugLog('Получен Point, пропускаем отображение границ', 'warn');
+                    return;
+                }
+                
                 const geoJsonLayer = L.geoJSON(geojson, {
                     style: {
                         color: color,
@@ -2297,8 +2666,41 @@ async function init() {
             addDebugLog(`Обработка города: ${params.city}`, 'info');
             const cityData = await geocode(params.city, params.country);
             if (cityData) {
-                addDebugLog(`Данные города получены: lat=${cityData.lat}, lon=${cityData.lon}`, 'info');
-                const boundary = await getBoundaryByQuery(params.city, params.country);
+                addDebugLog(`Данные города получены: lat=${cityData.lat}, lon=${cityData.lon}, OSM ID=${cityData.osmId}, OSM Type=${cityData.osmType}`, 'info');
+                
+                let boundary = null;
+                
+                // Для Токио (и других больших городов) НЕ используем OSM ID напрямую,
+                // так как это вернет всю префектуру с островами
+                // Вместо этого используем Nominatim с фильтрацией
+                addDebugLog('Пропускаем прямой запрос через OSM ID, используем Nominatim с фильтрацией', 'info');
+                
+                // Если не получили через OSM ID, пробуем через Nominatim
+                if (!boundary) {
+                    boundary = await getBoundaryByQuery(params.city, params.country);
+                    
+                    // Проверяем, что получили валидный результат (не Point)
+                    if (boundary && typeof boundary === 'object' && boundary.type && boundary.type !== 'Point') {
+                        addDebugLog(`Границы найдены через Nominatim, тип: ${boundary.type}`, 'success');
+                    } else if (boundary && Array.isArray(boundary) && boundary.length > 0) {
+                        addDebugLog(`Границы найдены через Nominatim, массив с ${boundary.length} полигонами`, 'success');
+                    } else {
+                        boundary = null;
+                    }
+                }
+                
+                // Если не нашли через Nominatim или получили Point, пробуем через Overpass с координатами
+                if (!boundary && cityData.lat && cityData.lon) {
+                    addDebugLog('Границы не найдены через Nominatim, пробуем через Overpass с координатами', 'info');
+                    boundary = await getBoundaryByOverpassWithCoords(cityData.lat, cityData.lon, params.city, params.country);
+                }
+                
+                // Если все еще не нашли, пробуем через Overpass по названию
+                if (!boundary) {
+                    addDebugLog('Границы не найдены через координаты, пробуем через Overpass по названию', 'info');
+                    boundary = await getBoundaryByOverpassQuery(params.city, params.country, false);
+                }
+                
                 if (boundary) {
                     addDebugLog('Границы города найдены, отображаем на карте', 'success');
                     displayBoundary(boundary, '#ff6b6b', 0.3);
