@@ -159,6 +159,16 @@
         .debug-toggle:hover {
             background: rgba(0, 0, 0, 0.9);
         }
+        
+        .qth-marker {
+            background: transparent !important;
+            border: none !important;
+        }
+        
+        .qth-marker div {
+            pointer-events: auto;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -175,6 +185,7 @@
     </div>
     
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="rda_data.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

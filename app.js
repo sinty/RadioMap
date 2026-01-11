@@ -139,6 +139,8 @@ function getUrlParams() {
     let country = params.get('country');
     let city = params.get('city');
     let region = params.get('region');
+    let rda = params.get('rda');
+    let qth = params.get('qth');
     
     // Если параметры не найдены, пробуем альтернативный способ
     if (!country && search) {
@@ -162,10 +164,26 @@ function getUrlParams() {
         }
     }
     
+    if (!rda && search) {
+        const match = search.match(/rda=([^&]*)/);
+        if (match) {
+            rda = decodeURIComponent(match[1]);
+        }
+    }
+    
+    if (!qth && search) {
+        const match = search.match(/qth=([^&]*)/);
+        if (match) {
+            qth = decodeURIComponent(match[1]);
+        }
+    }
+    
     return {
         country: country ? decodeURIComponent(country) : null,
         city: city ? decodeURIComponent(city) : null,
-        region: region ? decodeURIComponent(region) : null
+        region: region ? decodeURIComponent(region) : null,
+        rda: rda ? decodeURIComponent(rda) : null,
+        qth: qth ? decodeURIComponent(qth) : null
     };
 }
 
@@ -608,6 +626,291 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
 // Переменная для хранения текущих слоев границ
 let boundaryLayers = [];
 
+// Переменная для хранения слоев RDA
+let rdaLayers = [];
+
+// Переменная для хранения слоев QTH
+let qthLayers = [];
+
+// Функция для отображения QTH квадрата на карте
+function displayQTH(qth, centerLat, centerLon) {
+    // Очищаем предыдущие слои QTH
+    qthLayers.forEach(layer => {
+        map.removeLayer(layer);
+    });
+    qthLayers = [];
+    
+    // Определяем размер квадрата в зависимости от точности QTH
+    // QTH квадраты имеют соотношение сторон 2:1 (долгота:широта)
+    let latSize = 0; // размер по широте (север-юг)
+    let lonSize = 0; // размер по долготе (восток-запад)
+    
+    if (qth.length >= 10) {
+        // Супер-расширенный: 3 секунды долготы x 1.5 секунды широты
+        latSize = 1.5 / 3600; // 1.5 секунды = 0.000417 градуса
+        lonSize = 3 / 3600;   // 3 секунды = 0.000833 градуса
+    } else if (qth.length >= 8) {
+        // Расширенный: 30 секунд долготы x 15 секунд широты
+        latSize = 15 / 3600; // 15 секунд = 0.00417 градуса
+        lonSize = 30 / 3600; // 30 секунд = 0.00833 градуса
+    } else if (qth.length >= 6) {
+        // Подквадрат: 5 минут долготы x 2.5 минуты широты
+        latSize = 2.5 / 60; // 2.5 минуты = 0.0417 градуса
+        lonSize = 5 / 60;   // 5 минут = 0.0833 градуса
+    } else if (qth.length >= 4) {
+        // Квадрат: 2° долготы x 1° широты
+        latSize = 0.5; // половина градуса
+        lonSize = 1.0; // один градус
+    } else {
+        // Поле: 20° долготы x 10° широты
+        latSize = 5;  // 5 градусов
+        lonSize = 10; // 10 градусов
+    }
+    
+    // Вычисляем границы квадрата (центр минус/плюс половина размера)
+    const swLat = centerLat - latSize;
+    const swLon = centerLon - lonSize;
+    const neLat = centerLat + latSize;
+    const neLon = centerLon + lonSize;
+    
+    addDebugLog(`QTH ${qth}: центр [${centerLat.toFixed(4)}, ${centerLon.toFixed(4)}], размер [${latSize.toFixed(4)}, ${lonSize.toFixed(4)}]`, 'info');
+    addDebugLog(`QTH ${qth}: границы SW=[${swLat.toFixed(4)}, ${swLon.toFixed(4)}], NE=[${neLat.toFixed(4)}, ${neLon.toFixed(4)}]`, 'info');
+    
+    // Создаем прямоугольник для QTH квадрата
+    const bounds = L.latLngBounds(
+        [swLat, swLon], // SW
+        [neLat, neLon]  // NE
+    );
+    
+    const qthRectangle = L.rectangle(bounds, {
+        color: '#ff0000',
+        fillColor: '#ff0000',
+        fillOpacity: 0.15,
+        weight: 3,
+        dashArray: '10, 5'
+    });
+    
+    qthRectangle.addTo(map);
+    qthLayers.push(qthRectangle);
+    
+    // Добавляем маркер в центре с информацией
+    // Создаем текст для маркера
+    const markerText = `QTH: ${qth}`;
+    // Вычисляем примерную ширину текста для правильного позиционирования
+    const textWidth = markerText.length * 7 + 16; // примерная ширина
+    const textHeight = 28; // примерная высота
+    
+    const marker = L.marker([centerLat, centerLon], {
+        icon: L.divIcon({
+            className: 'qth-marker',
+            html: `<div style="background: #ff0000; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.3); border: 2px solid white; text-align: center; display: inline-block; pointer-events: none;">${markerText}</div>`,
+            iconSize: [textWidth, textHeight],
+            iconAnchor: [textWidth / 2, textHeight / 2], // Центрируем маркер
+            popupAnchor: [0, -textHeight / 2]
+        })
+    });
+    
+    marker.bindPopup(`
+        <div style="font-weight: bold; margin-bottom: 5px; font-size: 14px;">QTH: ${qth}</div>
+        <div style="margin-top: 5px;">Координаты: ${centerLat.toFixed(4)}°N, ${centerLon.toFixed(4)}°E</div>
+    `);
+    
+    marker.addTo(map);
+    qthLayers.push(marker);
+    
+    addDebugLog(`QTH квадрат ${qth} отображен на карте`, 'success');
+}
+
+// Функция для конвертации координат в QTH локатор (Maidenhead Locator System)
+function latLonToQTH(lat, lon, precision = 4) {
+    // Нормализуем координаты
+    lon = lon + 180;
+    lat = lat + 90;
+    
+    // Первый уровень (поле) - 20° x 10°
+    const fieldLon = Math.floor(lon / 20);
+    const fieldLat = Math.floor(lat / 10);
+    let qth = String.fromCharCode(65 + fieldLon) + String.fromCharCode(65 + fieldLat);
+    
+    if (precision >= 2) {
+        // Второй уровень (квадрат) - 2° x 1°
+        const squareLon = Math.floor((lon % 20) / 2);
+        const squareLat = Math.floor(lat % 10);
+        qth += squareLon.toString() + squareLat.toString();
+    }
+    
+    if (precision >= 4) {
+        // Третий уровень (подквадрат) - 5' x 2.5'
+        const subSquareLon = Math.floor(((lon % 20) % 2) * 12);
+        const subSquareLat = Math.floor((lat % 10) * 24);
+        qth += String.fromCharCode(97 + subSquareLon) + String.fromCharCode(97 + subSquareLat);
+    }
+    
+    if (precision >= 6) {
+        // Четвертый уровень (расширенный) - 30" x 15"
+        const extendedLon = Math.floor((((lon % 20) % 2) * 12) % 1 * 10);
+        const extendedLat = Math.floor(((lat % 10) * 24) % 1 * 10);
+        qth += extendedLon.toString() + extendedLat.toString();
+    }
+    
+    if (precision >= 8) {
+        // Пятый уровень (супер-расширенный) - 3" x 1.5"
+        const superExtendedLon = Math.floor((((((lon % 20) % 2) * 12) % 1 * 10) % 1) * 10);
+        const superExtendedLat = Math.floor(((((lat % 10) * 24) % 1 * 10) % 1) * 10);
+        qth += String.fromCharCode(97 + superExtendedLon) + String.fromCharCode(97 + superExtendedLat);
+    }
+    
+    return qth;
+}
+
+// Функция для конвертации QTH локатора в координаты (центр квадрата)
+function qthToLatLon(qth) {
+    if (!qth || qth.length < 2) return null;
+    
+    qth = qth.toUpperCase().trim();
+    
+    // Проверяем формат QTH (должен начинаться с двух букв)
+    if (!/^[A-R]{2}/.test(qth)) {
+        addDebugLog(`Неверный формат QTH: ${qth} (должен начинаться с двух букв A-R)`, 'error');
+        return null;
+    }
+    
+    // Первый уровень (поле) - 20° x 10°
+    const fieldLon = qth.charCodeAt(0) - 65; // A=0, B=1, ..., R=17
+    const fieldLat = qth.charCodeAt(1) - 65;
+    
+    let lon = fieldLon * 20 - 180;
+    let lat = fieldLat * 10 - 90;
+    
+    if (qth.length >= 4) {
+        // Второй уровень (квадрат) - 2° x 1°
+        const squareLon = parseInt(qth[2]) || 0;
+        const squareLat = parseInt(qth[3]) || 0;
+        if (isNaN(squareLon) || isNaN(squareLat)) {
+            addDebugLog(`Ошибка парсинга квадрата в QTH: ${qth}`, 'error');
+            return null;
+        }
+        lon += squareLon * 2;
+        lat += squareLat;
+    }
+    
+    if (qth.length >= 6) {
+        // Третий уровень (подквадрат) - 5 минут долготы x 2.5 минуты широты
+        // Подквадрат может быть в верхнем или нижнем регистре (a-x или A-X)
+        let subSquareLon = qth.charCodeAt(4);
+        let subSquareLat = qth.charCodeAt(5);
+        
+        // Конвертируем в нижний регистр для расчета
+        if (subSquareLon >= 65 && subSquareLon <= 88) { // A-X
+            subSquareLon = subSquareLon - 65;
+        } else if (subSquareLon >= 97 && subSquareLon <= 120) { // a-x
+            subSquareLon = subSquareLon - 97;
+        } else {
+            addDebugLog(`Ошибка парсинга подквадрата долготы в QTH: ${qth}, символ: ${qth[4]}`, 'error');
+            return null;
+        }
+        
+        if (subSquareLat >= 65 && subSquareLat <= 88) { // A-X
+            subSquareLat = subSquareLat - 65;
+        } else if (subSquareLat >= 97 && subSquareLat <= 120) { // a-x
+            subSquareLat = subSquareLat - 97;
+        } else {
+            addDebugLog(`Ошибка парсинга подквадрата широты в QTH: ${qth}, символ: ${qth[5]}`, 'error');
+            return null;
+        }
+        
+        if (subSquareLon < 0 || subSquareLon > 23 || subSquareLat < 0 || subSquareLat > 23) {
+            addDebugLog(`Ошибка парсинга подквадрата в QTH: ${qth}`, 'error');
+            return null;
+        }
+        
+        // 5 минут = 5/60 = 0.0833 градуса долготы
+        // 2.5 минуты = 2.5/60 = 0.0417 градуса широты
+        lon += subSquareLon * (5 / 60); // 5 минут на подквадрат
+        lat += subSquareLat * (2.5 / 60); // 2.5 минуты на подквадрат
+    }
+    
+    if (qth.length >= 8) {
+        // Четвертый уровень (расширенный) - 30 секунд долготы x 15 секунд широты
+        const extendedLon = parseInt(qth[6]);
+        const extendedLat = parseInt(qth[7]);
+        if (isNaN(extendedLon) || isNaN(extendedLat) || extendedLon < 0 || extendedLon > 9 || extendedLat < 0 || extendedLat > 9) {
+            addDebugLog(`Ошибка парсинга расширенного уровня в QTH: ${qth}`, 'error');
+            return null;
+        }
+        // 30 секунд = 30/3600 = 0.00833 градуса долготы
+        // 15 секунд = 15/3600 = 0.00417 градуса широты
+        lon += extendedLon * (30 / 3600);
+        lat += extendedLat * (15 / 3600);
+    }
+    
+    if (qth.length >= 10) {
+        // Пятый уровень (супер-расширенный) - 3 секунды долготы x 1.5 секунды широты
+        let superExtendedLon = qth.charCodeAt(8);
+        let superExtendedLat = qth.charCodeAt(9);
+        
+        // Конвертируем в нижний регистр для расчета
+        if (superExtendedLon >= 65 && superExtendedLon <= 88) { // A-X
+            superExtendedLon = superExtendedLon - 65;
+        } else if (superExtendedLon >= 97 && superExtendedLon <= 120) { // a-x
+            superExtendedLon = superExtendedLon - 97;
+        } else {
+            addDebugLog(`Ошибка парсинга супер-расширенного уровня долготы в QTH: ${qth}, символ: ${qth[8]}`, 'error');
+            return null;
+        }
+        
+        if (superExtendedLat >= 65 && superExtendedLat <= 88) { // A-X
+            superExtendedLat = superExtendedLat - 65;
+        } else if (superExtendedLat >= 97 && superExtendedLat <= 120) { // a-x
+            superExtendedLat = superExtendedLat - 97;
+        } else {
+            addDebugLog(`Ошибка парсинга супер-расширенного уровня широты в QTH: ${qth}, символ: ${qth[9]}`, 'error');
+            return null;
+        }
+        
+        if (superExtendedLon < 0 || superExtendedLon > 23 || superExtendedLat < 0 || superExtendedLat > 23) {
+            addDebugLog(`Ошибка парсинга супер-расширенного уровня в QTH: ${qth}`, 'error');
+            return null;
+        }
+        
+        // 3 секунды = 3/3600 = 0.000833 градуса долготы
+        // 1.5 секунды = 1.5/3600 = 0.000417 градуса широты
+        lon += superExtendedLon * (3 / 3600);
+        lat += superExtendedLat * (1.5 / 3600);
+    }
+    
+    // Возвращаем центр квадрата (добавляем половину размера квадрата)
+    if (qth.length >= 10) {
+        // Центр супер-расширенного квадрата: +1.5 секунды по долготе, +0.75 секунды по широте
+        lon += 1.5 / 3600; // 1.5 секунды
+        lat += 0.75 / 3600; // 0.75 секунды
+    } else if (qth.length >= 8) {
+        // Центр расширенного квадрата: +15 секунд по долготе, +7.5 секунд по широте
+        lon += 15 / 3600; // 15 секунд
+        lat += 7.5 / 3600; // 7.5 секунд
+    } else if (qth.length >= 6) {
+        // Центр подквадрата: +2.5 минуты по долготе, +1.25 минуты по широте
+        lon += 2.5 / 60; // 2.5 минуты
+        lat += 1.25 / 60; // 1.25 минуты
+    } else if (qth.length >= 4) {
+        // Центр квадрата: +1° по долготе, +0.5° по широте
+        lon += 1;
+        lat += 0.5;
+    } else {
+        // Центр поля: +10° по долготе, +5° по широте
+        lon += 10;
+        lat += 5;
+    }
+    
+    // Проверяем валидность координат
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        addDebugLog(`Получены невалидные координаты из QTH ${qth}: lat=${lat}, lon=${lon}`, 'error');
+        return null;
+    }
+    
+    return { lat: lat, lon: lon };
+}
+
 // Функция для отображения границ на карте
 function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2) {
     addDebugLog(`displayBoundary вызвана, тип данных: ${typeof geojson}, isArray: ${Array.isArray(geojson)}`, 'info');
@@ -786,6 +1089,400 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2) {
     
     addDebugLog(`Всего слоев границ после добавления: ${boundaryLayers.length}`, 'info');
 }
+
+// Функция для парсинга текстового файла RDA
+function parseRDAText(text) {
+    const districts = [];
+    // Данные могут быть экранированы в JavaScript строке
+    // Сначала пробуем декодировать экранированные символы
+    let decodedText = text;
+    if (text.includes('\\n')) {
+        // Заменяем экранированные символы
+        decodedText = text
+            .replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\r')
+            .replace(/\\t/g, '\t')
+            .replace(/\\\\/g, '\\');
+    }
+    
+    // Разбиваем по строкам
+    const lines = decodedText.split('\n');
+    
+    let currentRegion = null;
+    let currentRegionCode = null;
+    
+    addDebugLog(`Парсинг RDA данных, всего строк: ${lines.length}`, 'info');
+    if (lines.length > 0) {
+        addDebugLog(`Первая строка (первые 100 символов): ${lines[0].substring(0, 100)}`, 'info');
+        // Ищем пример строки с районом
+        for (let j = 0; j < Math.min(50, lines.length); j++) {
+            if (lines[j].match(/^[A-Z]{2}-\d+/)) {
+                addDebugLog(`Пример строки с районом (строка ${j}): ${lines[j].substring(0, 80)}`, 'info');
+                break;
+            }
+        }
+    }
+    
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i];
+        // Если строка содержит экранированные символы, декодируем их
+        if (line.includes('\\n')) {
+            line = line.replace(/\\n/g, '\n');
+        }
+        line = line.trim();
+        
+        // Пропускаем пустые строки и заголовки
+        if (!line || line.startsWith('"RUSSIAN DISTRICTS AWARD"') || 
+            (line.includes('LIST') && line.includes('RUSSIAN')) || 
+            line.startsWith('____') || line.match(/^\d+\s+.*RDA$/)) {
+            continue;
+        }
+        
+        // Определяем регион (строка с кодом в скобках, например "(AL)   UA9Y")
+        const regionMatch = line.match(/\(([A-Z]{2})\)/);
+        if (regionMatch) {
+            currentRegionCode = regionMatch[1];
+            // Пытаемся извлечь название региона из предыдущих строк
+            if (i > 0) {
+                let prevLine = lines[i - 1];
+                if (prevLine && prevLine.includes('\\n')) {
+                    prevLine = prevLine.replace(/\\n/g, '\n');
+                }
+                prevLine = prevLine.trim();
+                if (prevLine && !prevLine.match(/^[A-Z]{2}-\d+/)) {
+                    currentRegion = prevLine;
+                }
+            }
+            continue;
+        }
+        
+        // Парсим строку с районом (формат: "CB-54	Название района" или "CB-54\tНазвание района")
+        // Пробуем разные варианты разделителей: табуляция, пробелы
+        // Регулярное выражение: код района, затем табуляция/пробелы, затем название
+        const districtMatch = line.match(/^([A-Z]{2})-(\d+)[\t\s]+(.+?)(?:[\t\s]+deleted|[\t\s]*$|$)/);
+        if (districtMatch) {
+            const code = districtMatch[1] + '-' + districtMatch[2];
+            let name = districtMatch[3].trim();
+            
+            // Убираем лишние символы и пробелы
+            name = name.replace(/[\t\s]+/g, ' ').trim();
+            
+            // Пропускаем deleted районы
+            if (line.toLowerCase().includes('deleted')) {
+                continue;
+            }
+            
+            if (name && name !== 'deleted' && name.length > 0) {
+                districts.push({
+                    code: code,
+                    name: name,
+                    region: currentRegion || currentRegionCode,
+                    regionCode: currentRegionCode
+                });
+            }
+        } else if (line.match(/^[A-Z]{2}-\d+/)) {
+            // Если строка начинается с кода района, но не распарсилась, попробуем более простой способ
+            const simpleMatch = line.match(/^([A-Z]{2})-(\d+)[\t\s]+(.+)/);
+            if (simpleMatch) {
+                const code = simpleMatch[1] + '-' + simpleMatch[2];
+                let name = simpleMatch[3].trim();
+                name = name.replace(/[\t\s]+/g, ' ').trim();
+                
+                if (!line.toLowerCase().includes('deleted') && name && name.length > 0) {
+                    districts.push({
+                        code: code,
+                        name: name,
+                        region: currentRegion || currentRegionCode,
+                        regionCode: currentRegionCode
+                    });
+                }
+            }
+        }
+    }
+    
+    addDebugLog(`Парсинг завершен, найдено районов: ${districts.length}`, 'info');
+    if (districts.length > 0) {
+        addDebugLog(`Примеры найденных районов: ${districts.slice(0, 3).map(d => d.code).join(', ')}`, 'info');
+    }
+    
+    return districts;
+}
+
+// Функция для загрузки локального файла через XMLHttpRequest (работает с file:///)
+function loadLocalFile(url) {
+    return new Promise((resolve, reject) => {
+        try {
+            const xhr = new XMLHttpRequest();
+            // Используем синхронный запрос для локальных файлов (работает с file:///)
+            // ВНИМАНИЕ: синхронные запросы могут быть заблокированы в некоторых браузерах
+            xhr.open('GET', url, false); // false = синхронный
+            
+            xhr.onerror = function() {
+                reject(new Error('Network error'));
+            };
+            
+            xhr.send(null);
+            
+            // Для file:/// статус может быть 0 или 200
+            if (xhr.status === 0 || xhr.status === 200) {
+                if (xhr.responseText) {
+                    resolve(xhr.responseText);
+                } else {
+                    reject(new Error('Пустой ответ'));
+                }
+            } else {
+                reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+            }
+        } catch (e) {
+            reject(new Error(`Ошибка загрузки: ${e.message}`));
+        }
+    });
+}
+
+// Функция для загрузки и отображения районов RDA
+async function loadRDA(rdaCode = null) {
+    addDebugLog(`Загрузка данных RDA районов${rdaCode ? `, код района: ${rdaCode}` : ''}`, 'info');
+    
+    try {
+        // Сначала пробуем использовать встроенные данные (из rda_data.js)
+        if (typeof RDA_DATA !== 'undefined' && RDA_DATA) {
+            addDebugLog(`Используем встроенные данные RDA, размер: ${RDA_DATA.length} символов`, 'success');
+            return await processRDAData(RDA_DATA, rdaCode);
+        }
+        
+        addDebugLog('Встроенные данные RDA не найдены, пробуем загрузить локальный файл...', 'warn');
+        
+        // Если встроенные данные не найдены, пробуем загрузить локальный файл
+        const localRdaUrls = ['rda_rus.txt', './rda_rus.txt'];
+        
+        let text;
+        let localFileLoaded = false;
+        
+        // Пробуем загрузить из разных вариантов пути
+        for (const localRdaUrl of localRdaUrls) {
+            try {
+                addDebugLog(`Пробуем путь: ${localRdaUrl}`, 'info');
+                text = await loadLocalFile(localRdaUrl);
+                addDebugLog(`Загружен локальный файл RDA, размер: ${text.length} символов`, 'success');
+                localFileLoaded = true;
+                break;
+            } catch (localError) {
+                addDebugLog(`Ошибка загрузки с пути ${localRdaUrl}: ${localError.message}`, 'warn');
+            }
+        }
+        
+        if (localFileLoaded) {
+            return await processRDAData(text, rdaCode);
+        }
+        
+        addDebugLog('Локальный файл не найден, пробуем загрузить с удаленного источника...', 'warn');
+        
+        // Если локальный файл не найден, пробуем удаленный источник
+        const remoteRdaUrl = 'https://rdaward.org/rda_rus.txt';
+        addDebugLog(`Пробуем загрузить данные с: ${remoteRdaUrl}`, 'info');
+        
+        try {
+            const response = await fetch(remoteRdaUrl, {
+                method: 'GET',
+                mode: 'cors',
+                headers: {
+                    'User-Agent': 'RadioMap/1.0',
+                    'Accept': 'text/plain, */*'
+                }
+            });
+            
+            if (!response.ok) {
+                addDebugLog(`Ошибка HTTP при загрузке RDA: ${response.status} ${response.statusText}`, 'error');
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            text = await response.text();
+            addDebugLog(`Загружен текстовый файл RDA с удаленного источника, размер: ${text.length} символов`, 'success');
+            return await processRDAData(text, rdaCode);
+        } catch (fetchError) {
+            addDebugLog(`Ошибка fetch: ${fetchError.message}`, 'error');
+            // Если CORS ошибка, пробуем через прокси
+            if (fetchError.message.includes('CORS') || fetchError.message.includes('Failed to fetch')) {
+                addDebugLog('CORS ошибка. Пробуем загрузить через прокси...', 'warn');
+                try {
+                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(remoteRdaUrl)}`;
+                    addDebugLog(`Пробуем загрузить через прокси: ${proxyUrl}`, 'info');
+                    const proxyResponse = await fetch(proxyUrl);
+                    if (proxyResponse.ok) {
+                        const proxyData = await proxyResponse.json();
+                        if (proxyData.contents) {
+                            text = proxyData.contents;
+                            addDebugLog(`Загружен текстовый файл RDA через прокси, размер: ${text.length} символов`, 'success');
+                            return await processRDAData(text, rdaCode);
+                        }
+                    }
+                } catch (proxyError) {
+                    addDebugLog(`Ошибка загрузки через прокси: ${proxyError.message}`, 'error');
+                }
+            }
+            
+            // Если все методы не сработали
+            showError(`Не удалось загрузить данные RDA. Убедитесь, что файл rda_rus.txt находится в той же папке, что и index.html`);
+            return false;
+        }
+    } catch (error) {
+        addDebugLog(`Ошибка загрузки RDA: ${error.message}`, 'error');
+        addDebugLog(`Тип ошибки: ${error.name}`, 'error');
+        showError(`Ошибка загрузки данных RDA: ${error.message}`);
+        return false;
+    }
+}
+
+// Вспомогательная функция для обработки данных RDA
+async function processRDAData(text, rdaCode) {
+    // Парсим текстовый файл
+    const districts = parseRDAText(text);
+    addDebugLog(`Распознано ${districts.length} районов RDA`, 'success');
+    
+    if (districts.length === 0) {
+        addDebugLog('Не удалось распознать районы RDA из текстового файла', 'warn');
+        return false;
+    }
+    
+    // Если указан конкретный код района, фильтруем
+    let districtsToShow = districts;
+    if (rdaCode) {
+        const codeUpper = rdaCode.toUpperCase().trim();
+        districtsToShow = districts.filter(d => d.code.toUpperCase() === codeUpper);
+        
+        if (districtsToShow.length === 0) {
+            addDebugLog(`Район RDA с кодом ${rdaCode} не найден`, 'warn');
+            showError(`Район RDA "${rdaCode}" не найден`);
+            return false;
+        }
+        
+        addDebugLog(`Найден район RDA: ${districtsToShow[0].code} - ${districtsToShow[0].name}`, 'success');
+    }
+    
+    // Отображаем районы на карте
+    await displayRDADistricts(districtsToShow, rdaCode !== null);
+    
+    return true;
+}
+
+// Функция для отображения районов RDA на карте
+async function displayRDADistricts(districts, singleDistrict = false) {
+    addDebugLog(`Отображение ${districts.length} районов RDA на карте${singleDistrict ? ' (один район)' : ''}`, 'info');
+    
+    // Очищаем предыдущие слои RDA
+    rdaLayers.forEach(layer => {
+        map.removeLayer(layer);
+    });
+    rdaLayers = [];
+    
+    // Если показываем один район, обрабатываем все районы из списка (обычно один)
+    // Если показываем все, ограничиваем количество для производительности
+    const maxDistrictsToLoad = singleDistrict ? districts.length : 100;
+    const districtsToProcess = districts.slice(0, maxDistrictsToLoad);
+    
+    let loadedCount = 0;
+    
+    for (let i = 0; i < districtsToProcess.length; i++) {
+        const district = districtsToProcess[i];
+        
+        try {
+            addDebugLog(`Обработка района ${district.code}: ${district.name}`, 'info');
+            
+            // Пробуем геокодировать район
+            const query = `${district.name}, Россия`;
+            const geoData = await geocode(query);
+            
+            if (geoData) {
+                addDebugLog(`Найдены координаты для ${district.code}: lat=${geoData.lat}, lon=${geoData.lon}`, 'info');
+                
+                // Получаем границы района
+                const boundary = await getBoundaryByQuery(district.name, 'Россия');
+                
+                if (boundary) {
+                    addDebugLog(`Границы найдены для ${district.code}`, 'success');
+                    const layer = L.geoJSON(boundary, {
+                        style: {
+                            color: '#ff6b6b',
+                            fillColor: '#ff6b6b',
+                            fillOpacity: 0.25,
+                            weight: 3,
+                            dashArray: '5, 5'
+                        },
+                        onEachFeature: function(feature, layer) {
+                            // Вычисляем QTH для центра района
+                            let qthInfo = '';
+                            if (geoData && geoData.lat && geoData.lon) {
+                                const qth = latLonToQTH(geoData.lat, geoData.lon, 4);
+                                qthInfo = `<div style="margin-top: 5px;"><strong>QTH:</strong> ${qth}</div>`;
+                            }
+                            
+                            const popupContent = `
+                                <div style="font-weight: bold; margin-bottom: 5px; font-size: 14px;">${district.code}: ${district.name}</div>
+                                <div style="margin-top: 5px;">Регион: ${district.region || district.regionCode}</div>
+                                ${qthInfo}
+                            `;
+                            layer.bindPopup(popupContent);
+                        }
+                    });
+                    layer.addTo(map);
+                    rdaLayers.push(layer);
+                    loadedCount++;
+                } else {
+                    // Если границы не найдены, добавляем маркер
+                    addDebugLog(`Границы не найдены для ${district.code}, добавляем маркер`, 'warn');
+                    if (geoData.lat && geoData.lon) {
+                        const marker = L.marker([geoData.lat, geoData.lon], {
+                            icon: L.divIcon({
+                                className: 'rda-marker',
+                                html: `<div style="background: #ff6b6b; color: white; padding: 3px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; white-space: nowrap;">${district.code}</div>`,
+                                iconSize: [60, 25]
+                            })
+                        });
+                        // Вычисляем QTH для маркера
+                        const qth = latLonToQTH(geoData.lat, geoData.lon, 4);
+                        marker.bindPopup(`
+                            <div style="font-weight: bold; margin-bottom: 5px; font-size: 14px;">${district.code}: ${district.name}</div>
+                            <div style="margin-top: 5px;">Регион: ${district.region || district.regionCode}</div>
+                            <div style="margin-top: 5px;"><strong>QTH:</strong> ${qth}</div>
+                        `);
+                        marker.addTo(map);
+                        rdaLayers.push(marker);
+                        loadedCount++;
+                    }
+                }
+            } else {
+                addDebugLog(`Не удалось найти координаты для ${district.code}: ${district.name}`, 'warn');
+            }
+            
+            // Небольшая задержка между запросами, чтобы не перегружать API
+            if (i < districtsToProcess.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+        } catch (e) {
+            addDebugLog(`Ошибка обработки района ${district.code}: ${e.message}`, 'error');
+        }
+    }
+    
+    addDebugLog(`Отображено ${loadedCount} из ${districts.length} районов RDA на карте`, 'success');
+    
+    // Масштабируем карту на отображенные районы
+    if (loadedCount > 0 && rdaLayers.length > 0) {
+        try {
+            const group = new L.featureGroup(rdaLayers);
+            const bounds = group.getBounds();
+            if (bounds && bounds.isValid()) {
+                // Для одного района используем больший padding и больший zoom
+                const padding = singleDistrict ? [50, 50] : [20, 20];
+                const maxZoom = singleDistrict ? 12 : 8;
+                map.fitBounds(bounds, { padding: padding, maxZoom: maxZoom });
+                addDebugLog(`Карта масштабирована на ${singleDistrict ? 'район' : 'районы'} RDA`, 'success');
+            }
+        } catch (e) {
+            addDebugLog(`Ошибка масштабирования на RDA: ${e.message}`, 'warn');
+        }
+    }
+}
+
 
 // Функция для масштабирования карты
 function fitToBounds(coordinates, padding = 0) {
@@ -1090,8 +1787,14 @@ async function init() {
     const params = getUrlParams();
     
     // Отладочная информация
-    addDebugLog(`Параметры URL: country=${params.country}, city=${params.city}, region=${params.region}`, 'info');
+    addDebugLog(`Параметры URL: country=${params.country}, city=${params.city}, region=${params.region}, rda=${params.rda}, qth=${params.qth}`, 'info');
     addDebugLog(`Полный URL: ${window.location.href}`, 'info');
+    
+    // Если указан только rda, автоматически устанавливаем страну на Россию
+    if (params.rda !== null && !params.country) {
+        params.country = 'Россия';
+        addDebugLog('Параметр rda указан, автоматически устанавливаем country=Россия', 'info');
+    }
     
     if (!params.country) {
         // Если параметр не указан, показываем Россию по умолчанию
@@ -1102,8 +1805,23 @@ async function init() {
     showLoading(true);
     
     try {
-        // Случай 1: Только country
-        if (!params.city && !params.region) {
+        // Проверяем, указан ли конкретный код RDA района или QTH
+        const rdaValue = params.rda ? params.rda.trim() : null;
+        const isRdaCode = rdaValue && /^[A-Z]{2}-\d+$/i.test(rdaValue);
+        const hasQTH = params.qth !== null && params.qth.trim() !== '';
+        
+        // Если указан конкретный код RDA или QTH, не показываем границы страны
+        if (isRdaCode || hasQTH) {
+            if (isRdaCode) {
+                addDebugLog(`Показываем только район RDA: ${rdaValue}, границы страны не отображаются`, 'info');
+            }
+            if (hasQTH) {
+                addDebugLog(`Показываем только QTH: ${params.qth}, границы страны не отображаются`, 'info');
+            }
+            // Не загружаем границы страны, только район RDA или QTH будет загружен в finally
+        } else {
+            // Случай 1: Только country
+            if (!params.city && !params.region) {
             // Для России используем фиксированные координаты и масштаб
             const countryLower = params.country ? params.country.toLowerCase().trim() : '';
             if (countryLower === 'россия' || countryLower === 'russia' || countryLower === 'россия') {
@@ -1547,6 +2265,7 @@ async function init() {
                 showError(`Область "${params.region}" не найдена`);
             }
         }
+        } // закрываем else блок для isRdaCode
     } catch (error) {
         addDebugLog(`Ошибка: ${error.message}`, 'error');
         addDebugLog(`Стек: ${error.stack}`, 'error');
@@ -1562,7 +2281,110 @@ async function init() {
             showError('Произошла ошибка при загрузке карты: ' + (error.message || 'Неизвестная ошибка'));
         }
     } finally {
-        showLoading(false);
+        const params = getUrlParams();
+        
+        // Обработка параметра QTH (если указан только QTH, не показываем границы страны)
+        if (params.qth !== null && params.qth.trim() !== '') {
+            const qthValue = params.qth.trim().toUpperCase();
+            addDebugLog(`Обработка QTH локатора: ${qthValue}`, 'info');
+            
+            const coords = qthToLatLon(qthValue);
+            if (coords) {
+                addDebugLog(`QTH ${qthValue} преобразован в координаты: lat=${coords.lat.toFixed(4)}, lon=${coords.lon.toFixed(4)}`, 'success');
+                
+                // Отображаем QTH квадрат на карте
+                displayQTH(qthValue, coords.lat, coords.lon);
+                
+                // Масштабируем карту на QTH квадрат
+                setTimeout(() => {
+                    // Используем границы QTH квадрата для масштабирования
+                    if (qthLayers.length > 0) {
+                        try {
+                            const group = new L.featureGroup(qthLayers);
+                            const bounds = group.getBounds();
+                            if (bounds && bounds.isValid()) {
+                                // Определяем zoom в зависимости от точности QTH
+                                let maxZoom = 15;
+                                if (qthValue.length >= 10) {
+                                    maxZoom = 18; // Супер-расширенный - максимальный zoom
+                                } else if (qthValue.length >= 8) {
+                                    maxZoom = 16; // Расширенный - очень детальный zoom
+                                } else if (qthValue.length >= 6) {
+                                    maxZoom = 15; // Подквадрат - более детальный zoom
+                                } else if (qthValue.length >= 4) {
+                                    maxZoom = 10; // Квадрат - средний zoom
+                                } else {
+                                    maxZoom = 6; // Поле - общий вид
+                                }
+                                map.fitBounds(bounds, { padding: [20, 20], maxZoom: maxZoom });
+                                addDebugLog(`Карта масштабирована на QTH ${qthValue} квадрат, maxZoom=${maxZoom}`, 'success');
+                            } else {
+                                // Если bounds невалидны, используем setView
+                                let zoom = 8;
+                                if (qthValue.length >= 10) {
+                                    zoom = 16;
+                                } else if (qthValue.length >= 8) {
+                                    zoom = 14;
+                                } else if (qthValue.length >= 6) {
+                                    zoom = 12;
+                                } else if (qthValue.length >= 4) {
+                                    zoom = 8;
+                                } else {
+                                    zoom = 4;
+                                }
+                                map.setView([coords.lat, coords.lon], zoom);
+                                addDebugLog(`Карта установлена на QTH ${qthValue}, zoom=${zoom}`, 'success');
+                            }
+                        } catch (e) {
+                            addDebugLog(`Ошибка масштабирования на QTH: ${e.message}`, 'warn');
+                            map.setView([coords.lat, coords.lon], 10);
+                        }
+                    } else {
+                        map.setView([coords.lat, coords.lon], 10);
+                    }
+                }, 200);
+            } else {
+                addDebugLog(`Неверный формат QTH локатора: ${qthValue}`, 'error');
+                showError(`Неверный формат QTH локатора: ${qthValue}`);
+            }
+        }
+        
+        // Если указан параметр rda (даже пустой), загружаем районы RDA
+        if (params.rda !== null) {
+            // Проверяем, указан ли конкретный код района (например, CB-54)
+            const rdaValue = params.rda.trim();
+            const isRdaCode = /^[A-Z]{2}-\d+$/i.test(rdaValue);
+            
+            if (isRdaCode) {
+                addDebugLog(`Загрузка конкретного района RDA: ${rdaValue}`, 'info');
+                // Если указан конкретный код, не показываем границы страны
+                // Загружаем только этот район
+                loadRDA(rdaValue).then(success => {
+                    if (!success) {
+                        addDebugLog('Не удалось загрузить район RDA', 'error');
+                    }
+                    showLoading(false);
+                }).catch(err => {
+                    addDebugLog(`Ошибка загрузки RDA: ${err.message}`, 'error');
+                    showLoading(false);
+                });
+            } else {
+                addDebugLog('Загрузка всех районов RDA', 'info');
+                // Загружаем все районы (или показываем страну, если она уже загружена)
+                loadRDA(null).then(success => {
+                    if (!success) {
+                        addDebugLog('Не удалось загрузить районы RDA', 'error');
+                    }
+                    showLoading(false);
+                }).catch(err => {
+                    addDebugLog(`Ошибка загрузки RDA: ${err.message}`, 'error');
+                    showLoading(false);
+                });
+            }
+        } else {
+            showLoading(false);
+        }
+        
         addDebugLog('Инициализация завершена', 'info');
     }
 }
