@@ -72,6 +72,28 @@ window.toggleDebug = function() {
     }
 };
 
+// Функция для переключения видимости панели управления отступом
+let labelControlPanelVisible = false;
+window.toggleLabelControl = function() {
+    labelControlPanelVisible = !labelControlPanelVisible;
+    const panel = document.getElementById('label-control-panel');
+    const toggle = document.getElementById('label-control-toggle');
+    
+    if (panel) {
+        if (labelControlPanelVisible) {
+            panel.classList.add('visible');
+            if (toggle) toggle.textContent = 'Скрыть управление отступом';
+            // Показываем панель только если есть подпись
+            if (currentLabelData && currentLabelData.marker) {
+                initLabelControlPanel();
+            }
+        } else {
+            panel.classList.remove('visible');
+            if (toggle) toggle.textContent = 'Управление отступом';
+        }
+    }
+};
+
 // Переопределяем console.log, console.error, console.warn для отладки
 // ВАЖНО: используем флаг, чтобы избежать рекурсии
 
@@ -163,10 +185,9 @@ function initLabelControlPanel() {
     const newSliderEl = document.getElementById('offset-slider');
     const newResetBtnEl = document.getElementById('reset-offset-btn');
     
-    // Показываем панель только если есть подпись
-    if (currentLabelData && currentLabelData.marker) {
-        panel.style.display = 'block';
-        addDebugLog(`Панель управления отступом показана, currentLabelData существует`, 'info');
+    // Показываем панель только если она видима (открыта пользователем) и есть подпись
+    if (labelControlPanelVisible && currentLabelData && currentLabelData.marker) {
+        panel.classList.add('visible');
         updateZoomDisplay();
         
         // Устанавливаем значение ползунка
@@ -178,8 +199,7 @@ function initLabelControlPanel() {
             offsetValue.textContent = 'Авто';
         }
     } else {
-        panel.style.display = 'none';
-        addDebugLog(`Панель управления отступом скрыта, currentLabelData=${currentLabelData ? 'существует' : 'null'}`, 'info');
+        panel.classList.remove('visible');
     }
     
     // Обработчик изменения ползунка с debounce
@@ -1515,7 +1535,7 @@ function updateLabelPosition() {
         // Скрываем панель, если подписи нет
         const panel = document.getElementById('label-control-panel');
         if (panel) {
-            panel.style.display = 'none';
+            panel.classList.remove('visible');
         }
         return;
     }
@@ -1535,8 +1555,7 @@ function updateLabelPosition() {
         // Обновляем отображение панели (но не переинициализируем обработчики, чтобы избежать дублирования)
         const panel = document.getElementById('label-control-panel');
         const offsetValue = document.getElementById('offset-value');
-        if (panel && currentLabelData) {
-            panel.style.display = 'block';
+        if (panel && currentLabelData && labelControlPanelVisible) {
             updateZoomDisplay();
             // Обновляем только значение отступа в UI, не переинициализируя обработчики
             if (offsetValue) {
@@ -1591,7 +1610,7 @@ function addTextLabel(boundary, centerLat, centerLon, text, color = '#ff6b6b') {
         
         addDebugLog(`Подпись "${text}" добавлена на позицию [${initialPos.lat.toFixed(4)}, ${initialPos.lon.toFixed(4)}]`, 'success');
         
-        // Показываем панель управления отступом
+        // Инициализируем панель управления отступом (но не показываем автоматически)
         initLabelControlPanel();
         
         return label;

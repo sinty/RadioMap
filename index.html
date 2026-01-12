@@ -181,6 +181,29 @@
             z-index: 1000;
             font-size: 14px;
             min-width: 250px;
+            display: none;
+        }
+        
+        .label-control-panel.visible {
+            display: block;
+        }
+        
+        .label-control-toggle {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: 1px solid #555;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            z-index: 2001;
+            font-size: 12px;
+        }
+        
+        .label-control-toggle:hover {
+            background: rgba(0, 0, 0, 0.9);
         }
         
         .control-title {
@@ -256,7 +279,8 @@
     <div id="loading" class="loading" style="display: none;">Загрузка карты...</div>
     
     <!-- Панель управления отступом подписи -->
-    <div id="label-control-panel" class="label-control-panel" style="display: none;">
+    <button class="label-control-toggle" id="label-control-toggle" onclick="toggleLabelControl()">Управление отступом</button>
+    <div id="label-control-panel" class="label-control-panel">
         <div class="control-title">Управление отступом подписи</div>
         <div class="control-row">
             <label for="zoom-display">Масштаб (Zoom):</label>
