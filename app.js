@@ -1320,7 +1320,6 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
     // Вычисляем отступ вверх на основе текущего масштаба карты
     const currentZoom = map.getZoom();
     
-    // Используем пиксели для более точного расчета отступа
     // Вычисляем размер одного градуса широты в пикселях на текущем масштабе
     const point1 = map.latLngToContainerPoint([maxLat, labelLon]);
     const point2 = map.latLngToContainerPoint([maxLat + 1, labelLon]);
@@ -1332,12 +1331,56 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
     const totalOffsetPixels = labelHeightPixels + paddingPixels;
     
     // Конвертируем отступ из пикселей в градусы
-    const offsetInDegrees = totalOffsetPixels / pixelsPerDegree;
+    let offsetInDegrees = totalOffsetPixels / pixelsPerDegree;
+    
+    // Для маленьких масштабов (zoom < 8) используем больший отступ в градусах
+    // Для больших масштабов (zoom >= 8) используем пиксельный расчет
+    if (currentZoom < 8) {
+        // На маленьких масштабах используем градусный расчет с учетом размера области
+        // Вычисляем размер области по широте
+        let minLat = Infinity;
+        if (boundary && boundary.type === 'Polygon' && boundary.coordinates && boundary.coordinates[0]) {
+            const coords = boundary.coordinates[0];
+            coords.forEach(coord => {
+                const lat = coord[1]; // GeoJSON: [lon, lat]
+                if (lat < minLat) minLat = lat;
+            });
+        } else if (boundary && boundary.type === 'MultiPolygon' && boundary.coordinates && boundary.coordinates.length > 0) {
+            const firstPolygon = boundary.coordinates[0];
+            if (firstPolygon && firstPolygon[0]) {
+                const coords = firstPolygon[0];
+                coords.forEach(coord => {
+                    const lat = coord[1]; // GeoJSON: [lon, lat]
+                    if (lat < minLat) minLat = lat;
+                });
+            }
+        } else if (Array.isArray(boundary) && boundary.length > 0) {
+            const firstPolygon = boundary[0];
+            if (firstPolygon && firstPolygon.length > 0) {
+                firstPolygon.forEach(coord => {
+                    if (Array.isArray(coord) && coord.length >= 2) {
+                        const lat = coord[0]; // Leaflet: [lat, lon]
+                        if (lat < minLat) minLat = lat;
+                    }
+                });
+            }
+        }
+        
+        if (minLat !== Infinity) {
+            const latSize = maxLat - minLat;
+            // Используем 15-30% от размера области, но не менее 0.2 градуса
+            const percentOffset = Math.max(0.15, Math.min(0.3, latSize * 0.2));
+            offsetInDegrees = Math.max(0.2, percentOffset);
+        } else {
+            // Если не удалось найти размер, используем фиксированный отступ
+            offsetInDegrees = 0.3;
+        }
+    }
     
     // Минимальный отступ - 0.01 градуса (для очень большого зума)
-    // Максимальный отступ - 0.5 градуса (для очень маленького зума)
+    // Максимальный отступ - 1.0 градуса (для очень маленького зума)
     const minOffset = 0.01;
-    const maxOffset = 0.5;
+    const maxOffset = 1.0;
     const finalOffset = Math.max(minOffset, Math.min(maxOffset, offsetInDegrees));
     
     // Размещаем подпись выше северной границы с рассчитанным отступом
