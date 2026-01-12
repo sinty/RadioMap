@@ -1334,12 +1334,14 @@ function qthToLatLon(qth) {
 }
 
 // Функция для отображения границ на карте
-function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMarkers = true) {
-    addDebugLog(`displayBoundary вызвана, тип данных: ${typeof geojson}, isArray: ${Array.isArray(geojson)}`, 'info');
+function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMarkers = true, clearPrevious = true) {
+    addDebugLog(`displayBoundary вызвана, тип данных: ${typeof geojson}, isArray: ${Array.isArray(geojson)}, clearPrevious=${clearPrevious}`, 'info');
     
-    // Очищаем предыдущие слои границ
-    boundaryLayers.forEach(layer => map.removeLayer(layer));
-    boundaryLayers = [];
+    // Очищаем предыдущие слои границ только если указано
+    if (clearPrevious) {
+        boundaryLayers.forEach(layer => map.removeLayer(layer));
+        boundaryLayers = [];
+    }
     
     // Очищаем маркеры местоположений только если явно указано (по умолчанию очищаем)
     if (clearMarkers) {
@@ -2706,7 +2708,8 @@ async function init() {
                 
                 if (countryBoundary) {
                     addDebugLog('Границы страны найдены, отображаем на карте', 'success');
-                    displayBoundary(countryBoundary, '#3388ff', 0.2, false); // не очищаем маркеры
+                    // Отображаем границы страны (очищаем предыдущие слои)
+                    displayBoundary(countryBoundary, '#3388ff', 0.2, false, true);
                     
                     // Масштабируем карту на страну
                     setTimeout(() => {
@@ -2754,11 +2757,13 @@ async function init() {
                 
                 if (boundary) {
                     addDebugLog('Границы города найдены, отображаем на карте с подписью', 'success');
-                    // Отображаем границы города (не очищаем маркеры, чтобы не удалить границы страны)
-                    displayBoundary(boundary, '#ff6b6b', 0.3, false);
-                    
-                    // Добавляем подпись названия города в центре
+                    // Ждем, пока страна отобразится и зазумится, затем добавляем город поверх
                     setTimeout(() => {
+                        // Отображаем границы города поверх границ страны (не очищаем предыдущие слои)
+                        displayBoundary(boundary, '#ff6b6b', 0.3, false, false);
+                        
+                        // Добавляем подпись названия города в центре после отображения границ
+                        setTimeout(() => {
                         // Находим центр границ города для подписи
                         let centerLat = cityData.lat;
                         let centerLon = cityData.lon;
@@ -2818,9 +2823,10 @@ async function init() {
                             }
                         }
                         
-                        addTextLabel(centerLat, centerLon, params.city, '#ff6b6b');
-                        addDebugLog(`Подпись города "${params.city}" добавлена в центре [${centerLat.toFixed(4)}, ${centerLon.toFixed(4)}]`, 'success');
-                    }, 400);
+                            addTextLabel(centerLat, centerLon, params.city, '#ff6b6b');
+                            addDebugLog(`Подпись города "${params.city}" добавлена в центре [${centerLat.toFixed(4)}, ${centerLon.toFixed(4)}]`, 'success');
+                        }, 200);
+                    }, 500);
                 } else {
                     // Если границы не найдены, показываем маркер с подписью
                     addDebugLog('Границы города не найдены, показываем маркер с подписью', 'warn');
@@ -2829,7 +2835,7 @@ async function init() {
                         displayLocationMarker(cityData.lat, cityData.lon, params.city, 'city', false);
                         // Добавляем подпись названия отдельно
                         addTextLabel(cityData.lat, cityData.lon, params.city, '#ff6b6b');
-                    }, 400);
+                    }, 500);
                 }
             } else {
                 // Город не найден даже по координатам
@@ -2859,7 +2865,8 @@ async function init() {
                 
                 if (countryBoundary) {
                     addDebugLog('Границы страны найдены, отображаем на карте', 'success');
-                    displayBoundary(countryBoundary, '#3388ff', 0.2, false); // не очищаем маркеры
+                    // Отображаем границы страны (очищаем предыдущие слои)
+                    displayBoundary(countryBoundary, '#3388ff', 0.2, false, true);
                     
                     // Масштабируем карту на страну
                     setTimeout(() => {
@@ -2885,19 +2892,25 @@ async function init() {
                     const overpassBoundary = await getBoundaryByOverpassQuery(params.region, params.country, false);
                     if (overpassBoundary) {
                         addDebugLog('Границы региона найдены через Overpass', 'success');
-                        // Отображаем границы региона с заливкой (не очищаем маркеры, чтобы не удалить границы страны)
-                        displayBoundary(overpassBoundary, '#51cf66', 0.4, false); // большая заливка для региона
+                        // Ждем, пока страна отобразится и зазумится, затем добавляем регион поверх
+                        setTimeout(() => {
+                            // Отображаем границы региона с заливкой поверх границ страны (не очищаем предыдущие слои)
+                            displayBoundary(overpassBoundary, '#51cf66', 0.4, false, false); // большая заливка для региона
+                        }, 500);
                     } else {
                         // Если границы не найдены, показываем маркер
                         addDebugLog('Границы региона не найдены, показываем маркер', 'warn');
                         setTimeout(() => {
-                            displayLocationMarker(regionData.lat, regionData.lon, params.region, 'region', true);
-                        }, 400);
+                            displayLocationMarker(regionData.lat, regionData.lon, params.region, 'region', false);
+                        }, 500);
                     }
                 } else {
                     addDebugLog('Границы региона найдены, отображаем на карте с заливкой', 'success');
-                    // Отображаем границы региона с заливкой (не очищаем маркеры, чтобы не удалить границы страны)
-                    displayBoundary(boundary, '#51cf66', 0.4, false); // большая заливка для региона
+                    // Ждем, пока страна отобразится и зазумится, затем добавляем регион поверх
+                    setTimeout(() => {
+                        // Отображаем границы региона с заливкой поверх границ страны (не очищаем предыдущие слои)
+                        displayBoundary(boundary, '#51cf66', 0.4, false, false); // большая заливка для региона
+                    }, 500);
                 }
             } else {
                 // Регион не найден даже по координатам
