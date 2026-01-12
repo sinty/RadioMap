@@ -403,12 +403,141 @@ function getAlternativeCountryNames(query) {
 }
 
 // Функция для получения границ через альтернативный метод (используя Nominatim для получения OSM ID)
+// Функции для кэширования границ стран в LocalStorage
+const CACHE_VERSION = '1.0';
+const CACHE_TTL_DAYS = 7; // Время жизни кэша в днях
+
+function getCacheKey(query, isCountry = false) {
+    // Создаем ключ кэша на основе запроса и типа (страна/город/регион)
+    const prefix = isCountry ? 'country_boundary' : 'boundary';
+    return `${prefix}_${CACHE_VERSION}_${query.toLowerCase().trim()}`;
+}
+
+function saveBoundaryToCache(query, boundary, isCountry = false) {
+    try {
+        const cacheKey = getCacheKey(query, isCountry);
+        const cacheData = {
+            boundary: boundary,
+            timestamp: Date.now(),
+            query: query
+        };
+        const dataStr = JSON.stringify(cacheData);
+        
+        // Проверяем размер данных (LocalStorage обычно ограничен 5-10MB)
+        const sizeInMB = new Blob([dataStr]).size / (1024 * 1024);
+        if (sizeInMB > 5) {
+            addDebugLog(`Границы "${query}" слишком большие для кэша (${sizeInMB.toFixed(2)}MB), не сохраняем`, 'warn');
+            return false;
+        }
+        
+        localStorage.setItem(cacheKey, dataStr);
+        addDebugLog(`Границы "${query}" сохранены в кэш (${sizeInMB.toFixed(2)}MB)`, 'success');
+        return true;
+    } catch (e) {
+        // Если LocalStorage переполнен или недоступен, пытаемся очистить старые записи
+        if (e.name === 'QuotaExceededError' || e.code === 22) {
+            addDebugLog('LocalStorage переполнен, очищаем старые записи кэша', 'warn');
+            clearOldCache();
+            // Пробуем еще раз
+            try {
+                const cacheKey = getCacheKey(query, isCountry);
+                const cacheData = {
+                    boundary: boundary,
+                    timestamp: Date.now(),
+                    query: query
+                };
+                localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+                addDebugLog(`Границы "${query}" сохранены в кэш после очистки`, 'success');
+                return true;
+            } catch (e2) {
+                addDebugLog(`Не удалось сохранить в кэш: ${e2.message}`, 'warn');
+                return false;
+            }
+        }
+        addDebugLog(`Ошибка сохранения в кэш: ${e.message}`, 'warn');
+        return false;
+    }
+}
+
+function getBoundaryFromCache(query, isCountry = false) {
+    try {
+        const cacheKey = getCacheKey(query, isCountry);
+        const cachedStr = localStorage.getItem(cacheKey);
+        
+        if (!cachedStr) {
+            return null;
+        }
+        
+        const cacheData = JSON.parse(cachedStr);
+        const ageInDays = (Date.now() - cacheData.timestamp) / (1000 * 60 * 60 * 24);
+        
+        // Проверяем срок действия кэша
+        if (ageInDays > CACHE_TTL_DAYS) {
+            addDebugLog(`Кэш для "${query}" устарел (${ageInDays.toFixed(1)} дней), удаляем`, 'info');
+            localStorage.removeItem(cacheKey);
+            return null;
+        }
+        
+        addDebugLog(`Границы "${query}" загружены из кэша (возраст: ${ageInDays.toFixed(1)} дней)`, 'success');
+        return cacheData.boundary;
+    } catch (e) {
+        addDebugLog(`Ошибка загрузки из кэша: ${e.message}`, 'warn');
+        return null;
+    }
+}
+
+function clearOldCache() {
+    try {
+        const keysToRemove = [];
+        const now = Date.now();
+        
+        // Проходим по всем ключам LocalStorage
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (key.startsWith('country_boundary_') || key.startsWith('boundary_'))) {
+                try {
+                    const cachedStr = localStorage.getItem(key);
+                    if (cachedStr) {
+                        const cacheData = JSON.parse(cachedStr);
+                        const ageInDays = (now - cacheData.timestamp) / (1000 * 60 * 60 * 24);
+                        if (ageInDays > CACHE_TTL_DAYS) {
+                            keysToRemove.push(key);
+                        }
+                    }
+                } catch (e) {
+                    // Если не удалось распарсить, удаляем
+                    keysToRemove.push(key);
+                }
+            }
+        }
+        
+        // Удаляем устаревшие записи
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+        if (keysToRemove.length > 0) {
+            addDebugLog(`Очищено ${keysToRemove.length} устаревших записей кэша`, 'info');
+        }
+    } catch (e) {
+        addDebugLog(`Ошибка очистки кэша: ${e.message}`, 'warn');
+    }
+}
+
 async function getBoundaryByQuery(query, country = 'Россия') {
     // Для стран используем только query без country в запросе
     // Для городов добавляем страну в запрос для более точного поиска
     const fullQuery = country && country !== 'Россия' ? `${query}, ${country}` : query;
     
     addDebugLog(`getBoundaryByQuery: query="${query}", country="${country}", fullQuery="${fullQuery}"`, 'info');
+    
+    // Определяем, является ли запрос страной (если country не указан или равен query)
+    const isCountry = !country || country === query || country === 'Россия' && query === 'Россия';
+    
+    // Сначала проверяем кэш (только для стран)
+    if (isCountry) {
+        const cachedBoundary = getBoundaryFromCache(query, true);
+        if (cachedBoundary) {
+            return cachedBoundary;
+        }
+    }
     
     // Сначала пробуем получить через Nominatim с polygon_geojson
     // Используем polygon_kml=1 для более детальных данных, или polygon_geojson=1
@@ -613,7 +742,12 @@ async function getBoundaryByQuery(query, country = 'Россия') {
                         // Проверяем, что это не слишком далеко от ожидаемых координат (для Токио это нормально)
                     }
                     addDebugLog(`Возвращаем GeoJSON от Nominatim: ${selectedItem.geojson.type}`, 'success');
-                    return selectedItem.geojson;
+                    const result = selectedItem.geojson;
+                    // Сохраняем в кэш, если это страна
+                    if (isCountry) {
+                        saveBoundaryToCache(query, result, true);
+                    }
+                    return result;
                 }
             }
             
@@ -649,6 +783,10 @@ async function getBoundaryByQuery(query, country = 'Россия') {
                 if (boundary) {
                     console.log('Границы получены через OSM ID');
                     addDebugLog('Границы получены через OSM ID', 'success');
+                    // Сохраняем в кэш, если это страна
+                    if (isCountry) {
+                        saveBoundaryToCache(query, boundary, true);
+                    }
                     return boundary;
                 }
             }
@@ -688,6 +826,14 @@ async function getBoundaryByQuery(query, country = 'Россия') {
 
 // Функция для получения границ через Overpass по запросу
 async function getBoundaryByOverpassQuery(query, country = 'Россия', isCountry = false) {
+    // Сначала проверяем кэш для стран
+    if (isCountry) {
+        const cachedBoundary = getBoundaryFromCache(query, true);
+        if (cachedBoundary) {
+            return cachedBoundary;
+        }
+    }
+    
     const overpassUrl = 'https://overpass-api.de/api/interpreter';
     
     try {
@@ -828,6 +974,10 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
                     }
                     if (coordinates.length > 0) {
                         console.log('Границы получены из Overpass, полигонов:', coordinates.length);
+                        // Сохраняем в кэш, если это страна
+                        if (isCountry) {
+                            saveBoundaryToCache(query, coordinates, true);
+                        }
                         return coordinates;
                     }
                 }
@@ -864,7 +1014,14 @@ async function getBoundaryByOverpassQuery(query, country = 'Россия', isCou
                         }
                     }
                 });
-                return coordinates.length > 0 ? coordinates : null;
+                if (coordinates.length > 0) {
+                    // Сохраняем в кэш, если это страна
+                    if (isCountry) {
+                        saveBoundaryToCache(query, coordinates, true);
+                    }
+                    return coordinates;
+                }
+                return null;
             }
             
             // Если не нашли relation или ways, но есть nodes - это не границы, пропускаем
@@ -2297,6 +2454,10 @@ function fitToBounds(coordinates, padding = 0) {
 // Основная функция инициализации
 async function init() {
     addDebugLog('Начало инициализации', 'info');
+    
+    // Очищаем устаревший кэш при запуске
+    clearOldCache();
+    
     const params = getUrlParams();
     
     // Отладочная информация
