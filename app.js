@@ -164,8 +164,9 @@ function initLabelControlPanel() {
     const newResetBtnEl = document.getElementById('reset-offset-btn');
     
     // Показываем панель только если есть подпись
-    if (currentLabelData) {
+    if (currentLabelData && currentLabelData.marker) {
         panel.style.display = 'block';
+        addDebugLog(`Панель управления отступом показана, currentLabelData существует`, 'info');
         updateZoomDisplay();
         
         // Устанавливаем значение ползунка
@@ -178,6 +179,7 @@ function initLabelControlPanel() {
         }
     } else {
         panel.style.display = 'none';
+        addDebugLog(`Панель управления отступом скрыта, currentLabelData=${currentLabelData ? 'существует' : 'null'}`, 'info');
     }
     
     // Обработчик изменения ползунка с debounce
@@ -1277,9 +1279,9 @@ const zoomOffsetTable = {
 
 // Функция для получения отступа из таблицы на основе текущего масштаба
 function getOffsetFromTable(zoom) {
-    // Если точное значение есть в таблице, возвращаем его
-    if (zoomOffsetTable[zoom]) {
-        return zoomOffsetTable[zoom];
+    if (!zoom || isNaN(zoom) || !isFinite(zoom)) {
+        addDebugLog(`Некорректный zoom для getOffsetFromTable: ${zoom}`, 'error');
+        return 0.2;
     }
     
     // Ищем ближайшие значения в таблице для интерполяции
@@ -1311,6 +1313,7 @@ function getOffsetFromTable(zoom) {
     }
     
     // Fallback (не должно произойти)
+    addDebugLog(`Не удалось найти отступ для zoom=${zoom}`, 'error');
     return 0.2;
 }
 
@@ -1490,7 +1493,7 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
     // Размещаем подпись выше северной границы с рассчитанным отступом
     const labelLat = maxLat + finalOffset;
     
-    addDebugLog(`Позиция подписи (авто): maxLat=${maxLat.toFixed(4)}, zoom=${currentZoom}, pixelsPerDegree=${pixelsPerDegree.toFixed(2)}, offset=${finalOffset.toFixed(6)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
+    addDebugLog(`Позиция подписи (авто): maxLat=${maxLat.toFixed(4)}, zoom=${currentZoom}, offset=${finalOffset.toFixed(4)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
     
     return { lat: labelLat, lon: labelLon };
 }
@@ -1506,63 +1509,86 @@ function updateLabelPosition() {
         return;
     }
     
-    const { boundary, centerLat, centerLon } = currentLabelData;
-    const newPos = calculateLabelPosition(boundary, centerLat, centerLon);
-    
-    // Обновляем позицию маркера
-    currentLabelData.marker.setLatLng([newPos.lat, newPos.lon]);
-    
-    // Обновляем отображение панели (но не переинициализируем обработчики, чтобы избежать дублирования)
-    const panel = document.getElementById('label-control-panel');
-    const offsetValue = document.getElementById('offset-value');
-    if (panel && currentLabelData) {
-        panel.style.display = 'block';
-        updateZoomDisplay();
-        // Обновляем только значение отступа в UI, не переинициализируя обработчики
-        if (offsetValue) {
-            if (manualLabelOffset !== null) {
-                offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
-            } else {
-                offsetValue.textContent = 'Авто';
+    try {
+        const { boundary, centerLat, centerLon } = currentLabelData;
+        const newPos = calculateLabelPosition(boundary, centerLat, centerLon);
+        
+        if (!newPos || isNaN(newPos.lat) || isNaN(newPos.lon)) {
+            addDebugLog(`Ошибка: некорректная позиция при обновлении: ${JSON.stringify(newPos)}`, 'error');
+            return;
+        }
+        
+        // Обновляем позицию маркера
+        currentLabelData.marker.setLatLng([newPos.lat, newPos.lon]);
+        
+        // Обновляем отображение панели (но не переинициализируем обработчики, чтобы избежать дублирования)
+        const panel = document.getElementById('label-control-panel');
+        const offsetValue = document.getElementById('offset-value');
+        if (panel && currentLabelData) {
+            panel.style.display = 'block';
+            updateZoomDisplay();
+            // Обновляем только значение отступа в UI, не переинициализируя обработчики
+            if (offsetValue) {
+                if (manualLabelOffset !== null) {
+                    offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
+                } else {
+                    offsetValue.textContent = 'Авто';
+                }
             }
         }
+        
+        addDebugLog(`Позиция подписи обновлена: [${newPos.lat.toFixed(4)}, ${newPos.lon.toFixed(4)}]`, 'info');
+    } catch (error) {
+        addDebugLog(`Ошибка при обновлении позиции подписи: ${error.message}`, 'error');
+        console.error('Ошибка при обновлении позиции подписи:', error);
     }
-    
-    addDebugLog(`Позиция подписи обновлена: [${newPos.lat.toFixed(4)}, ${newPos.lon.toFixed(4)}]`, 'info');
 }
 
 // Функция для добавления текстовой метки на карту с автоматическим пересчетом при изменении масштаба
 function addTextLabel(boundary, centerLat, centerLon, text, color = '#ff6b6b') {
-    // Вычисляем начальную позицию
-    const initialPos = calculateLabelPosition(boundary, centerLat, centerLon);
-    
-    const label = L.marker([initialPos.lat, initialPos.lon], {
-        icon: L.divIcon({
-            className: 'text-label',
-            html: `<div style="background: ${color}; color: white; padding: 8px 12px; border-radius: 5px; font-size: 14px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.5); border: 2px solid white; text-align: center; display: inline-block;">${text}</div>`,
-            iconSize: [200, 40],
-            iconAnchor: [100, 20],
-            popupAnchor: [0, -20]
-        })
-    });
-    
-    label.addTo(map);
-    locationMarkers.push(label);
-    
-    // Сохраняем данные для пересчета при изменении масштаба
-    currentLabelData = {
-        boundary: boundary,
-        centerLat: centerLat,
-        centerLon: centerLon,
-        text: text,
-        color: color,
-        marker: label
-    };
-    
-    // Показываем панель управления отступом
-    initLabelControlPanel();
-    
-    return label;
+    try {
+        // Вычисляем начальную позицию
+        const initialPos = calculateLabelPosition(boundary, centerLat, centerLon);
+        
+        if (!initialPos || isNaN(initialPos.lat) || isNaN(initialPos.lon)) {
+            addDebugLog(`Ошибка: некорректная позиция для подписи: ${JSON.stringify(initialPos)}`, 'error');
+            return null;
+        }
+        
+        const label = L.marker([initialPos.lat, initialPos.lon], {
+            icon: L.divIcon({
+                className: 'text-label',
+                html: `<div style="background: ${color}; color: white; padding: 8px 12px; border-radius: 5px; font-size: 14px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.5); border: 2px solid white; text-align: center; display: inline-block;">${text}</div>`,
+                iconSize: [200, 40],
+                iconAnchor: [100, 20],
+                popupAnchor: [0, -20]
+            })
+        });
+        
+        label.addTo(map);
+        locationMarkers.push(label);
+        
+        // Сохраняем данные для пересчета при изменении масштаба
+        currentLabelData = {
+            boundary: boundary,
+            centerLat: centerLat,
+            centerLon: centerLon,
+            text: text,
+            color: color,
+            marker: label
+        };
+        
+        addDebugLog(`Подпись "${text}" добавлена на позицию [${initialPos.lat.toFixed(4)}, ${initialPos.lon.toFixed(4)}]`, 'success');
+        
+        // Показываем панель управления отступом
+        initLabelControlPanel();
+        
+        return label;
+    } catch (error) {
+        addDebugLog(`Ошибка при добавлении подписи: ${error.message}`, 'error');
+        console.error('Ошибка при добавлении подписи:', error);
+        return null;
+    }
 }
 
 // Функция для отображения QTH квадрата на карте
