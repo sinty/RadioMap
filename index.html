@@ -169,6 +169,82 @@
             pointer-events: auto;
             cursor: pointer;
         }
+        
+        .label-control-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            font-size: 14px;
+            min-width: 250px;
+        }
+        
+        .control-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            font-size: 16px;
+            color: #333;
+            border-bottom: 2px solid #3388ff;
+            padding-bottom: 5px;
+        }
+        
+        .control-row {
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .control-row label {
+            min-width: 120px;
+            font-weight: 500;
+            color: #555;
+        }
+        
+        #zoom-display {
+            font-weight: bold;
+            color: #3388ff;
+            font-size: 16px;
+        }
+        
+        #offset-slider {
+            flex: 1;
+            min-width: 100px;
+        }
+        
+        #offset-value {
+            min-width: 60px;
+            text-align: right;
+            font-weight: bold;
+            color: #3388ff;
+        }
+        
+        .control-button {
+            width: 100%;
+            background: #3388ff;
+            border: none;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            margin-top: 5px;
+        }
+        
+        .control-button:hover {
+            background: #2a6fcc;
+            transform: scale(1.02);
+        }
+        
+        .control-button:active {
+            transform: scale(0.98);
+        }
     </style>
 </head>
 <body>
@@ -178,6 +254,24 @@
         <button class="error-button" id="reload-button" onclick="window.location.reload()">Перезагрузить</button>
     </div>
     <div id="loading" class="loading" style="display: none;">Загрузка карты...</div>
+    
+    <!-- Панель управления отступом подписи -->
+    <div id="label-control-panel" class="label-control-panel" style="display: none;">
+        <div class="control-title">Управление отступом подписи</div>
+        <div class="control-row">
+            <label for="zoom-display">Масштаб (Zoom):</label>
+            <span id="zoom-display">-</span>
+        </div>
+        <div class="control-row">
+            <label for="offset-slider">Отступ (градусы):</label>
+            <input type="range" id="offset-slider" min="0" max="100" step="0.1" value="0">
+            <span id="offset-value">Авто</span>
+        </div>
+        <div class="control-row">
+            <button id="reset-offset-btn" class="control-button">Сбросить (Авто)</button>
+        </div>
+    </div>
+    
     <button class="debug-toggle" id="debug-toggle" onclick="toggleDebug()">Показать отладку</button>
     <div id="debug-panel" class="debug-panel">
         <h3>Панель отладки</h3>

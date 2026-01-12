@@ -114,6 +114,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 // Обработчики событий для пересчета позиции подписи при изменении масштаба
 map.on('zoomend', function() {
+    updateZoomDisplay();
     if (currentLabelData) {
         updateLabelPosition();
     }
@@ -123,6 +124,80 @@ map.on('moveend', function() {
     if (currentLabelData) {
         updateLabelPosition();
     }
+});
+
+map.on('zoom', function() {
+    updateZoomDisplay();
+});
+
+// Функция для обновления отображения масштаба
+function updateZoomDisplay() {
+    const zoomDisplay = document.getElementById('zoom-display');
+    if (zoomDisplay) {
+        const zoom = map.getZoom();
+        zoomDisplay.textContent = zoom.toFixed(1);
+    }
+}
+
+// Инициализация панели управления отступом
+function initLabelControlPanel() {
+    const panel = document.getElementById('label-control-panel');
+    const slider = document.getElementById('offset-slider');
+    const offsetValue = document.getElementById('offset-value');
+    const resetBtn = document.getElementById('reset-offset-btn');
+    
+    if (!panel || !slider || !offsetValue || !resetBtn) {
+        return;
+    }
+    
+    // Показываем панель только если есть подпись
+    if (currentLabelData) {
+        panel.style.display = 'block';
+        updateZoomDisplay();
+        
+        // Устанавливаем значение ползунка
+        if (manualLabelOffset !== null) {
+            slider.value = (manualLabelOffset * 10).toFixed(1); // умножаем на 10 для более точного управления
+            offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
+        } else {
+            slider.value = 0;
+            offsetValue.textContent = 'Авто';
+        }
+    } else {
+        panel.style.display = 'none';
+    }
+    
+    // Обработчик изменения ползунка
+    slider.addEventListener('input', function() {
+        const value = parseFloat(slider.value);
+        if (value === 0) {
+            manualLabelOffset = null;
+            offsetValue.textContent = 'Авто';
+        } else {
+            manualLabelOffset = value / 10; // делим на 10 обратно
+            offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
+        }
+        
+        // Обновляем позицию подписи
+        if (currentLabelData) {
+            updateLabelPosition();
+        }
+    });
+    
+    // Обработчик кнопки сброса
+    resetBtn.addEventListener('click', function() {
+        manualLabelOffset = null;
+        slider.value = 0;
+        offsetValue.textContent = 'Авто';
+        if (currentLabelData) {
+            updateLabelPosition();
+        }
+    });
+}
+
+// Вызываем инициализацию при загрузке
+window.addEventListener('load', function() {
+    setTimeout(initLabelControlPanel, 100);
 });
 
 // Функция для получения параметров из URL
@@ -1161,6 +1236,9 @@ let locationMarkers = [];
 // Переменная для хранения данных о текущей подписи (для пересчета при изменении масштаба)
 let currentLabelData = null; // { boundary, centerLat, centerLon, text, color, marker }
 
+// Переменная для хранения значения отступа подписи (null = автоматический расчет)
+let manualLabelOffset = null; // значение в градусах или null для авто
+
 // Функция для отображения маркера местоположения
 function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) {
     // Очищаем предыдущие маркеры
@@ -1170,6 +1248,11 @@ function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) 
     locationMarkers = [];
     // Очищаем данные подписи
     currentLabelData = null;
+    // Скрываем панель управления
+    const panel = document.getElementById('label-control-panel');
+    if (panel) {
+        panel.style.display = 'none';
+    }
     
     // Определяем цвет и иконку в зависимости от типа
     let color = '#ff6b6b'; // красный для города
@@ -1311,13 +1394,21 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
     
     // Если не удалось найти границы, используем центр
     if (maxLat === -Infinity) {
-        return { lat: centerLat + 0.2, lon: centerLon };
+        const offset = manualLabelOffset !== null ? manualLabelOffset : 0.2;
+        return { lat: centerLat + offset, lon: centerLon };
     }
     
     // Находим центральную долготу
     const labelLon = getCenterLongitude(boundary, centerLon);
     
-    // Вычисляем отступ вверх на основе текущего масштаба карты
+    // Если задан ручной отступ, используем его
+    if (manualLabelOffset !== null) {
+        const labelLat = maxLat + manualLabelOffset;
+        addDebugLog(`Позиция подписи (ручной отступ): maxLat=${maxLat.toFixed(4)}, offset=${manualLabelOffset.toFixed(4)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
+        return { lat: labelLat, lon: labelLon };
+    }
+    
+    // Автоматический расчет отступа
     const currentZoom = map.getZoom();
     
     // Вычисляем размер одного градуса широты в пикселях на текущем масштабе
@@ -1386,7 +1477,7 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
     // Размещаем подпись выше северной границы с рассчитанным отступом
     const labelLat = maxLat + finalOffset;
     
-    addDebugLog(`Позиция подписи: maxLat=${maxLat.toFixed(4)}, zoom=${currentZoom}, pixelsPerDegree=${pixelsPerDegree.toFixed(2)}, offset=${finalOffset.toFixed(6)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
+    addDebugLog(`Позиция подписи (авто): maxLat=${maxLat.toFixed(4)}, zoom=${currentZoom}, pixelsPerDegree=${pixelsPerDegree.toFixed(2)}, offset=${finalOffset.toFixed(6)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
     
     return { lat: labelLat, lon: labelLon };
 }
@@ -1394,6 +1485,11 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
 // Функция для обновления позиции подписи при изменении масштаба
 function updateLabelPosition() {
     if (!currentLabelData || !currentLabelData.marker) {
+        // Скрываем панель, если подписи нет
+        const panel = document.getElementById('label-control-panel');
+        if (panel) {
+            panel.style.display = 'none';
+        }
         return;
     }
     
@@ -1402,6 +1498,9 @@ function updateLabelPosition() {
     
     // Обновляем позицию маркера
     currentLabelData.marker.setLatLng([newPos.lat, newPos.lon]);
+    
+    // Обновляем отображение панели
+    initLabelControlPanel();
     
     addDebugLog(`Позиция подписи обновлена: [${newPos.lat.toFixed(4)}, ${newPos.lon.toFixed(4)}]`, 'info');
 }
@@ -1433,6 +1532,9 @@ function addTextLabel(boundary, centerLat, centerLon, text, color = '#ff6b6b') {
         color: color,
         marker: label
     };
+    
+    // Показываем панель управления отступом
+    initLabelControlPanel();
     
     return label;
 }
@@ -1734,6 +1836,11 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
         locationMarkers = [];
         // Очищаем данные подписи только если очищаем все маркеры
         currentLabelData = null;
+        // Скрываем панель управления
+        const panel = document.getElementById('label-control-panel');
+        if (panel) {
+            panel.style.display = 'none';
+        }
     }
     
     if (!geojson) {
