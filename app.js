@@ -2762,69 +2762,76 @@ async function init() {
                         // Отображаем границы города поверх границ страны (не очищаем предыдущие слои)
                         displayBoundary(boundary, '#ff6b6b', 0.3, false, false);
                         
-                        // Добавляем подпись названия города в центре после отображения границ
+                        // Добавляем подпись названия города над городом (не перекрывая границы) после отображения границ
                         setTimeout(() => {
-                        // Находим центр границ города для подписи
-                        let centerLat = cityData.lat;
-                        let centerLon = cityData.lon;
+                        // Находим северную границу города для размещения подписи выше
+                        let labelLat = cityData.lat;
+                        let labelLon = cityData.lon;
+                        let maxLat = -Infinity; // максимальная широта (северная граница)
                         
-                        // Пытаемся найти центр из границ
+                        // Пытаемся найти северную границу из границ
                         // В GeoJSON координаты идут как [lon, lat], а в Leaflet как [lat, lon]
                         if (boundary.type === 'Polygon' && boundary.coordinates && boundary.coordinates[0]) {
                             const coords = boundary.coordinates[0];
-                            let sumLat = 0, sumLon = 0, count = 0;
+                            let sumLon = 0, count = 0;
                             coords.forEach(coord => {
                                 const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
                                 const lat = coord[1];
-                                sumLat += lat;
+                                if (lat > maxLat) maxLat = lat;
                                 sumLon += lon;
                                 count++;
                             });
                             if (count > 0) {
-                                centerLat = sumLat / count;
-                                centerLon = sumLon / count;
+                                labelLon = sumLon / count;
+                                // Размещаем подпись немного выше северной границы (примерно 0.1 градуса)
+                                labelLat = maxLat + 0.1;
                             }
                         } else if (boundary.type === 'MultiPolygon' && boundary.coordinates && boundary.coordinates.length > 0) {
                             // Берем первый полигон
                             const firstPolygon = boundary.coordinates[0];
                             if (firstPolygon && firstPolygon[0]) {
                                 const coords = firstPolygon[0];
-                                let sumLat = 0, sumLon = 0, count = 0;
+                                let sumLon = 0, count = 0;
                                 coords.forEach(coord => {
                                     const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
                                     const lat = coord[1];
-                                    sumLat += lat;
+                                    if (lat > maxLat) maxLat = lat;
                                     sumLon += lon;
                                     count++;
                                 });
                                 if (count > 0) {
-                                    centerLat = sumLat / count;
-                                    centerLon = sumLon / count;
+                                    labelLon = sumLon / count;
+                                    // Размещаем подпись немного выше северной границы
+                                    labelLat = maxLat + 0.1;
                                 }
                             }
                         } else if (Array.isArray(boundary) && boundary.length > 0) {
                             // Массив координат (уже в формате Leaflet [lat, lon])
                             const firstPolygon = boundary[0];
                             if (firstPolygon && firstPolygon.length > 0) {
-                                let sumLat = 0, sumLon = 0, count = 0;
+                                let sumLon = 0, count = 0;
                                 firstPolygon.forEach(coord => {
                                     if (Array.isArray(coord) && coord.length >= 2) {
                                         const lat = coord[0]; // Leaflet: [lat, lon]
                                         const lon = coord[1] > 180 ? coord[1] - 360 : coord[1];
-                                        sumLat += lat;
+                                        if (lat > maxLat) maxLat = lat;
                                         sumLon += lon;
                                         count++;
                                     }
                                 });
                                 if (count > 0) {
-                                    centerLat = sumLat / count;
-                                    centerLon = sumLon / count;
+                                    labelLon = sumLon / count;
+                                    // Размещаем подпись немного выше северной границы
+                                    labelLat = maxLat + 0.1;
                                 }
                             }
+                        } else {
+                            // Если не удалось найти границы, просто смещаем центр вверх
+                            labelLat = cityData.lat + 0.1;
                         }
                         
-                            addTextLabel(centerLat, centerLon, params.city, '#ff6b6b');
-                            addDebugLog(`Подпись города "${params.city}" добавлена в центре [${centerLat.toFixed(4)}, ${centerLon.toFixed(4)}]`, 'success');
+                            addTextLabel(labelLat, labelLon, params.city, '#ff6b6b');
+                            addDebugLog(`Подпись города "${params.city}" добавлена над городом [${labelLat.toFixed(4)}, ${labelLon.toFixed(4)}]`, 'success');
                         }, 200);
                     }, 500);
                 } else {
@@ -2833,8 +2840,8 @@ async function init() {
                     setTimeout(() => {
                         // Показываем маркер без подписи (showLabel=false), так как добавим подпись отдельно
                         displayLocationMarker(cityData.lat, cityData.lon, params.city, 'city', false);
-                        // Добавляем подпись названия отдельно
-                        addTextLabel(cityData.lat, cityData.lon, params.city, '#ff6b6b');
+                        // Добавляем подпись названия немного выше маркера, чтобы не перекрывать его
+                        addTextLabel(cityData.lat + 0.05, cityData.lon, params.city, '#ff6b6b');
                     }, 500);
                 }
             } else {
