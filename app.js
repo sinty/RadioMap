@@ -112,6 +112,19 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19
 }).addTo(map);
 
+// Обработчики событий для пересчета позиции подписи при изменении масштаба
+map.on('zoomend', function() {
+    if (currentLabelData) {
+        updateLabelPosition();
+    }
+});
+
+map.on('moveend', function() {
+    if (currentLabelData) {
+        updateLabelPosition();
+    }
+});
+
 // Функция для получения параметров из URL
 function getUrlParams() {
     let search = window.location.search;
@@ -1145,6 +1158,9 @@ let qthLayers = [];
 // Переменная для хранения маркеров местоположений
 let locationMarkers = [];
 
+// Переменная для хранения данных о текущей подписи (для пересчета при изменении масштаба)
+let currentLabelData = null; // { boundary, centerLat, centerLon, text, color, marker }
+
 // Функция для отображения маркера местоположения
 function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) {
     // Очищаем предыдущие маркеры
@@ -1152,6 +1168,8 @@ function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) 
         map.removeLayer(marker);
     });
     locationMarkers = [];
+    // Очищаем данные подписи
+    currentLabelData = null;
     
     // Определяем цвет и иконку в зависимости от типа
     let color = '#ff6b6b'; // красный для города
@@ -1194,40 +1212,26 @@ function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) 
     }
 }
 
-// Функция для вычисления безопасной позиции подписи вне границ области
-function calculateLabelPosition(boundary, centerLat, centerLon) {
+// Функция для вычисления максимальной верхней точки границ области
+function getMaxLatitude(boundary) {
     let maxLat = -Infinity;
-    let minLat = Infinity;
-    let maxLon = -Infinity;
-    let minLon = Infinity;
-    let labelLon = centerLon;
     
-    // Находим границы области
+    // Находим максимальную широту (северную границу)
     if (boundary && boundary.type === 'Polygon' && boundary.coordinates && boundary.coordinates[0]) {
         const coords = boundary.coordinates[0];
         coords.forEach(coord => {
-            const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
-            const lat = coord[1];
+            const lat = coord[1]; // GeoJSON: [lon, lat]
             if (lat > maxLat) maxLat = lat;
-            if (lat < minLat) minLat = lat;
-            if (lon > maxLon) maxLon = lon;
-            if (lon < minLon) minLon = lon;
         });
-        labelLon = (minLon + maxLon) / 2;
     } else if (boundary && boundary.type === 'MultiPolygon' && boundary.coordinates && boundary.coordinates.length > 0) {
         // Берем первый (основной) полигон
         const firstPolygon = boundary.coordinates[0];
         if (firstPolygon && firstPolygon[0]) {
             const coords = firstPolygon[0];
             coords.forEach(coord => {
-                const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
-                const lat = coord[1];
+                const lat = coord[1]; // GeoJSON: [lon, lat]
                 if (lat > maxLat) maxLat = lat;
-                if (lat < minLat) minLat = lat;
-                if (lon > maxLon) maxLon = lon;
-                if (lon < minLon) minLon = lon;
             });
-            labelLon = (minLon + maxLon) / 2;
         }
     } else if (Array.isArray(boundary) && boundary.length > 0) {
         // Массив координат (уже в формате Leaflet [lat, lon])
@@ -1236,43 +1240,122 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
             firstPolygon.forEach(coord => {
                 if (Array.isArray(coord) && coord.length >= 2) {
                     const lat = coord[0]; // Leaflet: [lat, lon]
-                    const lon = coord[1] > 180 ? coord[1] - 360 : coord[1];
                     if (lat > maxLat) maxLat = lat;
-                    if (lat < minLat) minLat = lat;
+                }
+            });
+        }
+    } else if (boundary && boundary.type === 'Point') {
+        // Если это точка, используем её координаты
+        if (boundary.coordinates && boundary.coordinates.length >= 2) {
+            maxLat = boundary.coordinates[1]; // GeoJSON: [lon, lat]
+        }
+    }
+    
+    return maxLat;
+}
+
+// Функция для вычисления центральной долготы границ области
+function getCenterLongitude(boundary, centerLon) {
+    let maxLon = -Infinity;
+    let minLon = Infinity;
+    
+    // Находим границы по долготе
+    if (boundary && boundary.type === 'Polygon' && boundary.coordinates && boundary.coordinates[0]) {
+        const coords = boundary.coordinates[0];
+        coords.forEach(coord => {
+            const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
+            if (lon > maxLon) maxLon = lon;
+            if (lon < minLon) minLon = lon;
+        });
+    } else if (boundary && boundary.type === 'MultiPolygon' && boundary.coordinates && boundary.coordinates.length > 0) {
+        const firstPolygon = boundary.coordinates[0];
+        if (firstPolygon && firstPolygon[0]) {
+            const coords = firstPolygon[0];
+            coords.forEach(coord => {
+                const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
+                if (lon > maxLon) maxLon = lon;
+                if (lon < minLon) minLon = lon;
+            });
+        }
+    } else if (Array.isArray(boundary) && boundary.length > 0) {
+        const firstPolygon = boundary[0];
+        if (firstPolygon && firstPolygon.length > 0) {
+            firstPolygon.forEach(coord => {
+                if (Array.isArray(coord) && coord.length >= 2) {
+                    const lon = coord[1] > 180 ? coord[1] - 360 : coord[1]; // Leaflet: [lat, lon]
                     if (lon > maxLon) maxLon = lon;
                     if (lon < minLon) minLon = lon;
                 }
             });
-            labelLon = (minLon + maxLon) / 2;
+        }
+    } else if (boundary && boundary.type === 'Point') {
+        // Если это точка, используем её координаты
+        if (boundary.coordinates && boundary.coordinates.length >= 2) {
+            const lon = boundary.coordinates[0] > 180 ? boundary.coordinates[0] - 360 : boundary.coordinates[0]; // GeoJSON: [lon, lat]
+            return lon;
         }
     }
     
     // Если не удалось найти границы, используем центр
-    if (maxLat === -Infinity) {
-        maxLat = centerLat;
-        minLat = centerLat;
+    if (maxLon === -Infinity) {
+        return centerLon;
     }
     
-    // Вычисляем размер области по широте
-    const latSize = maxLat - minLat;
+    return (minLon + maxLon) / 2;
+}
+
+// Функция для вычисления безопасной позиции подписи вне границ области с учетом масштаба
+function calculateLabelPosition(boundary, centerLat, centerLon) {
+    // Находим максимальную верхнюю точку (северную границу)
+    const maxLat = getMaxLatitude(boundary);
     
-    // Вычисляем безопасное расстояние для подписи
-    // Используем минимум 0.2 градуса или 30% от размера области (но не более 2 градусов)
-    // Увеличиваем смещение для лучшей видимости при большом масштабе страны
-    let labelOffset = Math.max(0.2, latSize * 0.3);
-    labelOffset = Math.min(labelOffset, 2.0); // Ограничиваем максимум 2 градусами для больших стран
+    // Если не удалось найти границы, используем центр
+    if (maxLat === -Infinity) {
+        return { lat: centerLat + 0.2, lon: centerLon };
+    }
     
-    // Размещаем подпись выше северной границы
-    const labelLat = maxLat + labelOffset;
+    // Находим центральную долготу
+    const labelLon = getCenterLongitude(boundary, centerLon);
     
-    addDebugLog(`Позиция подписи: область [${minLat.toFixed(4)}-${maxLat.toFixed(4)}], размер ${latSize.toFixed(4)}°, смещение ${labelOffset.toFixed(4)}°`, 'info');
+    // Вычисляем отступ вверх на основе текущего масштаба карты
+    const currentZoom = map.getZoom();
+    
+    // При большом масштабе (близко) - маленький отступ, при маленьком масштабе (далеко) - большой отступ
+    // Zoom обычно от 1 до 18, где 1 - весь мир, 18 - очень близко
+    // Используем обратную зависимость: чем меньше zoom, тем больше отступ
+    const baseOffset = 0.15; // базовый отступ в градусах
+    const zoomFactor = (19 - currentZoom) / 18; // от 1 (zoom=1) до 0 (zoom=18)
+    const dynamicOffset = baseOffset * (1 + zoomFactor * 2); // от 0.15 до 0.45 градусов
+    
+    // Размещаем подпись выше северной границы с динамическим отступом
+    const labelLat = maxLat + dynamicOffset;
+    
+    addDebugLog(`Позиция подписи: maxLat=${maxLat.toFixed(4)}, zoom=${currentZoom}, offset=${dynamicOffset.toFixed(4)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
     
     return { lat: labelLat, lon: labelLon };
 }
 
-// Функция для добавления текстовой метки на карту
-function addTextLabel(lat, lon, text, color = '#ff6b6b') {
-    const label = L.marker([lat, lon], {
+// Функция для обновления позиции подписи при изменении масштаба
+function updateLabelPosition() {
+    if (!currentLabelData || !currentLabelData.marker) {
+        return;
+    }
+    
+    const { boundary, centerLat, centerLon } = currentLabelData;
+    const newPos = calculateLabelPosition(boundary, centerLat, centerLon);
+    
+    // Обновляем позицию маркера
+    currentLabelData.marker.setLatLng([newPos.lat, newPos.lon]);
+    
+    addDebugLog(`Позиция подписи обновлена: [${newPos.lat.toFixed(4)}, ${newPos.lon.toFixed(4)}]`, 'info');
+}
+
+// Функция для добавления текстовой метки на карту с автоматическим пересчетом при изменении масштаба
+function addTextLabel(boundary, centerLat, centerLon, text, color = '#ff6b6b') {
+    // Вычисляем начальную позицию
+    const initialPos = calculateLabelPosition(boundary, centerLat, centerLon);
+    
+    const label = L.marker([initialPos.lat, initialPos.lon], {
         icon: L.divIcon({
             className: 'text-label',
             html: `<div style="background: ${color}; color: white; padding: 8px 12px; border-radius: 5px; font-size: 14px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.5); border: 2px solid white; text-align: center; display: inline-block;">${text}</div>`,
@@ -1284,6 +1367,17 @@ function addTextLabel(lat, lon, text, color = '#ff6b6b') {
     
     label.addTo(map);
     locationMarkers.push(label);
+    
+    // Сохраняем данные для пересчета при изменении масштаба
+    currentLabelData = {
+        boundary: boundary,
+        centerLat: centerLat,
+        centerLon: centerLon,
+        text: text,
+        color: color,
+        marker: label
+    };
+    
     return label;
 }
 
@@ -1582,6 +1676,8 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
             map.removeLayer(marker);
         });
         locationMarkers = [];
+        // Очищаем данные подписи только если очищаем все маркеры
+        currentLabelData = null;
     }
     
     if (!geojson) {
@@ -3011,11 +3107,9 @@ async function init() {
                         
                         // Добавляем подпись названия города над городом (не перекрывая границы) после отображения границ
                         setTimeout(() => {
-                            // Вычисляем безопасную позицию подписи вне границ города
-                            const labelPos = calculateLabelPosition(boundary, cityData.lat, cityData.lon);
-                            
-                            addTextLabel(labelPos.lat, labelPos.lon, params.city, '#ff6b6b');
-                            addDebugLog(`Подпись города "${params.city}" добавлена над городом [${labelPos.lat.toFixed(4)}, ${labelPos.lon.toFixed(4)}]`, 'success');
+                            // Добавляем подпись с автоматическим пересчетом при изменении масштаба
+                            addTextLabel(boundary, cityData.lat, cityData.lon, params.city, '#ff6b6b');
+                            addDebugLog(`Подпись города "${params.city}" добавлена над городом с автоматическим пересчетом`, 'success');
                         }, 200);
                     }, 500);
                 } else {
@@ -3025,8 +3119,9 @@ async function init() {
                         // Показываем маркер без подписи (showLabel=false), так как добавим подпись отдельно
                         displayLocationMarker(cityData.lat, cityData.lon, params.city, 'city', false);
                         // Добавляем подпись названия немного выше маркера, чтобы не перекрывать его
-                        // Используем фиксированное смещение, так как границ нет
-                        addTextLabel(cityData.lat + 0.15, cityData.lon, params.city, '#ff6b6b');
+                        // Используем фиктивные границы (null) для расчета позиции на основе координат
+                        const fakeBoundary = { type: 'Point', coordinates: [cityData.lon, cityData.lat] };
+                        addTextLabel(fakeBoundary, cityData.lat, cityData.lon, params.city, '#ff6b6b');
                     }, 500);
                 }
             } else {
