@@ -295,12 +295,20 @@ function getUrlParams() {
         }
     }
     
+    // Функция для очистки кавычек из параметра
+    const cleanParam = (param) => {
+        if (!param) return null;
+        const decoded = decodeURIComponent(param);
+        // Удаляем кавычки в начале и конце, если они есть
+        return decoded.replace(/^["']|["']$/g, '').trim();
+    };
+    
     return {
-        country: country ? decodeURIComponent(country) : null,
-        city: city ? decodeURIComponent(city) : null,
-        region: region ? decodeURIComponent(region) : null,
-        rda: rda ? decodeURIComponent(rda) : null,
-        qth: qth ? decodeURIComponent(qth) : null
+        country: country ? cleanParam(country) : null,
+        city: city ? cleanParam(city) : null,
+        region: region ? cleanParam(region) : null,
+        rda: rda ? cleanParam(rda) : null,
+        qth: qth ? cleanParam(qth) : null
     };
 }
 
