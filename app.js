@@ -989,7 +989,7 @@ let qthLayers = [];
 let locationMarkers = [];
 
 // Функция для отображения маркера местоположения
-function displayLocationMarker(lat, lon, name, type = 'city') {
+function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) {
     // Очищаем предыдущие маркеры
     locationMarkers.forEach(marker => {
         map.removeLayer(marker);
@@ -1008,9 +1008,9 @@ function displayLocationMarker(lat, lon, name, type = 'city') {
     const marker = L.marker([lat, lon], {
         icon: L.divIcon({
             className: 'location-marker',
-            html: `<div style="background: ${color}; color: white; padding: 6px 10px; border-radius: 5px; font-size: 13px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.4); border: 2px solid white; text-align: center; display: inline-block;">${iconText}: ${name}</div>`,
-            iconSize: [150, 35],
-            iconAnchor: [75, 17.5],
+            html: showLabel ? `<div style="background: ${color}; color: white; padding: 6px 10px; border-radius: 5px; font-size: 13px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.4); border: 2px solid white; text-align: center; display: inline-block;">${name}</div>` : '',
+            iconSize: showLabel ? [150, 35] : [0, 0],
+            iconAnchor: showLabel ? [75, 17.5] : [0, 0],
             popupAnchor: [0, -17.5]
         })
     });
@@ -1018,17 +1018,40 @@ function displayLocationMarker(lat, lon, name, type = 'city') {
     marker.bindPopup(`
         <div style="font-weight: bold; margin-bottom: 5px; font-size: 14px;">${iconText}: ${name}</div>
         <div style="margin-top: 5px;">Координаты: ${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E</div>
-        <div style="margin-top: 5px; color: #666; font-size: 12px;">Границы не найдены, показана точка местоположения</div>
+        <div style="margin-top: 5px; color: #666; font-size: 12px;">${showLabel ? 'Границы не найдены, показана точка местоположения' : 'Показана точка местоположения'}</div>
     `);
     
     marker.addTo(map);
     locationMarkers.push(marker);
     
-    // Масштабируем карту на маркер
-    setTimeout(() => {
-        map.setView([lat, lon], 12); // zoom 12 для города
-        addDebugLog(`Маркер ${type} "${name}" отображен на карте`, 'info');
-    }, 100);
+    // Масштабируем карту на маркер только если showLabel=true и это не режим показа внутри страны
+    // Если showLabel=false, значит показываем внутри страны и не меняем масштаб
+    if (showLabel) {
+        setTimeout(() => {
+            map.setView([lat, lon], 12); // zoom 12 для города
+            addDebugLog(`Маркер ${type} "${name}" отображен на карте`, 'info');
+        }, 100);
+    } else {
+        // Если показываем внутри страны, не меняем масштаб
+        addDebugLog(`Маркер ${type} "${name}" отображен на карте (без изменения масштаба)`, 'info');
+    }
+}
+
+// Функция для добавления текстовой метки на карту
+function addTextLabel(lat, lon, text, color = '#ff6b6b') {
+    const label = L.marker([lat, lon], {
+        icon: L.divIcon({
+            className: 'text-label',
+            html: `<div style="background: ${color}; color: white; padding: 8px 12px; border-radius: 5px; font-size: 14px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.5); border: 2px solid white; text-align: center; display: inline-block;">${text}</div>`,
+            iconSize: [200, 40],
+            iconAnchor: [100, 20],
+            popupAnchor: [0, -20]
+        })
+    });
+    
+    label.addTo(map);
+    locationMarkers.push(label);
+    return label;
 }
 
 // Функция для отображения QTH квадрата на карте
@@ -2663,30 +2686,58 @@ async function init() {
         }
         // Случай 2: country + city
         else if (params.city) {
-            addDebugLog(`Обработка города: ${params.city}`, 'info');
+            addDebugLog(`Обработка города: ${params.city} в стране: ${params.country}`, 'info');
+            
+            // Сначала загружаем и показываем границы страны
+            addDebugLog('Шаг 1: Загружаем границы страны', 'info');
+            const countryData = await geocode(params.country);
+            if (countryData) {
+                const countryLower = params.country ? params.country.toLowerCase().trim() : '';
+                let countryBoundary = null;
+                
+                if (countryLower === 'россия' || countryLower === 'russia') {
+                    countryBoundary = await getBoundaryByQuery('Россия');
+                } else {
+                    countryBoundary = await getBoundaryByQuery(params.country);
+                    if (!countryBoundary) {
+                        countryBoundary = await getBoundaryByOverpassQuery(params.country, null, true);
+                    }
+                }
+                
+                if (countryBoundary) {
+                    addDebugLog('Границы страны найдены, отображаем на карте', 'success');
+                    displayBoundary(countryBoundary, '#3388ff', 0.2, false); // не очищаем маркеры
+                    
+                    // Масштабируем карту на страну
+                    setTimeout(() => {
+                        addDebugLog('Масштабируем карту на страну', 'info');
+                        fitToBounds(null, 0);
+                    }, 300);
+                } else {
+                    addDebugLog('Границы страны не найдены, центрируем на стране', 'warn');
+                    safeSetView(countryData.lat, countryData.lon, 6);
+                }
+            }
+            
+            // Затем загружаем и показываем город
+            addDebugLog('Шаг 2: Загружаем данные города', 'info');
             const cityData = await geocode(params.city, params.country);
             if (cityData) {
                 addDebugLog(`Данные города получены: lat=${cityData.lat}, lon=${cityData.lon}, OSM ID=${cityData.osmId}, OSM Type=${cityData.osmType}`, 'info');
                 
                 let boundary = null;
                 
-                // Для Токио (и других больших городов) НЕ используем OSM ID напрямую,
-                // так как это вернет всю префектуру с островами
-                // Вместо этого используем Nominatim с фильтрацией
-                addDebugLog('Пропускаем прямой запрос через OSM ID, используем Nominatim с фильтрацией', 'info');
+                // Пробуем получить границы города
+                addDebugLog('Пробуем получить границы города через Nominatim', 'info');
+                boundary = await getBoundaryByQuery(params.city, params.country);
                 
-                // Если не получили через OSM ID, пробуем через Nominatim
-                if (!boundary) {
-                    boundary = await getBoundaryByQuery(params.city, params.country);
-                    
-                    // Проверяем, что получили валидный результат (не Point)
-                    if (boundary && typeof boundary === 'object' && boundary.type && boundary.type !== 'Point') {
-                        addDebugLog(`Границы найдены через Nominatim, тип: ${boundary.type}`, 'success');
-                    } else if (boundary && Array.isArray(boundary) && boundary.length > 0) {
-                        addDebugLog(`Границы найдены через Nominatim, массив с ${boundary.length} полигонами`, 'success');
-                    } else {
-                        boundary = null;
-                    }
+                // Проверяем, что получили валидный результат (не Point)
+                if (boundary && typeof boundary === 'object' && boundary.type && boundary.type !== 'Point') {
+                    addDebugLog(`Границы найдены через Nominatim, тип: ${boundary.type}`, 'success');
+                } else if (boundary && Array.isArray(boundary) && boundary.length > 0) {
+                    addDebugLog(`Границы найдены через Nominatim, массив с ${boundary.length} полигонами`, 'success');
+                } else {
+                    boundary = null;
                 }
                 
                 // Если не нашли через Nominatim или получили Point, пробуем через Overpass с координатами
@@ -2702,100 +2753,156 @@ async function init() {
                 }
                 
                 if (boundary) {
-                    addDebugLog('Границы города найдены, отображаем на карте', 'success');
-                    displayBoundary(boundary, '#ff6b6b', 0.3);
-                    // Ждем немного, чтобы слои успели добавиться, затем масштабируем
-                    setTimeout(() => {
-                        addDebugLog('Вызываем fitToBounds для города', 'info');
-                        fitToBounds(null, 0.5); // 50% padding, используем границы слоев
-                    }, 200);
-                } else {
-                    // Если границы не найдены, показываем точку города
-                    addDebugLog('Границы города не найдены, показываем точку местоположения', 'warn');
+                    addDebugLog('Границы города найдены, отображаем на карте с подписью', 'success');
+                    // Отображаем границы города (не очищаем маркеры, чтобы не удалить границы страны)
+                    displayBoundary(boundary, '#ff6b6b', 0.3, false);
                     
-                    // Сначала показываем границы страны на фоне, если они есть
-                    const countryData = await geocode(params.country);
-                    if (countryData) {
-                        const countryBoundary = await getBoundaryByQuery(params.country);
-                        if (countryBoundary) {
-                            // Не очищаем маркеры при отображении границ страны в фоне
-                            displayBoundary(countryBoundary, '#3388ff', 0.1, false); // более прозрачные границы страны
+                    // Добавляем подпись названия города в центре
+                    setTimeout(() => {
+                        // Находим центр границ города для подписи
+                        let centerLat = cityData.lat;
+                        let centerLon = cityData.lon;
+                        
+                        // Пытаемся найти центр из границ
+                        // В GeoJSON координаты идут как [lon, lat], а в Leaflet как [lat, lon]
+                        if (boundary.type === 'Polygon' && boundary.coordinates && boundary.coordinates[0]) {
+                            const coords = boundary.coordinates[0];
+                            let sumLat = 0, sumLon = 0, count = 0;
+                            coords.forEach(coord => {
+                                const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
+                                const lat = coord[1];
+                                sumLat += lat;
+                                sumLon += lon;
+                                count++;
+                            });
+                            if (count > 0) {
+                                centerLat = sumLat / count;
+                                centerLon = sumLon / count;
+                            }
+                        } else if (boundary.type === 'MultiPolygon' && boundary.coordinates && boundary.coordinates.length > 0) {
+                            // Берем первый полигон
+                            const firstPolygon = boundary.coordinates[0];
+                            if (firstPolygon && firstPolygon[0]) {
+                                const coords = firstPolygon[0];
+                                let sumLat = 0, sumLon = 0, count = 0;
+                                coords.forEach(coord => {
+                                    const lon = coord[0] > 180 ? coord[0] - 360 : coord[0]; // GeoJSON: [lon, lat]
+                                    const lat = coord[1];
+                                    sumLat += lat;
+                                    sumLon += lon;
+                                    count++;
+                                });
+                                if (count > 0) {
+                                    centerLat = sumLat / count;
+                                    centerLon = sumLon / count;
+                                }
+                            }
+                        } else if (Array.isArray(boundary) && boundary.length > 0) {
+                            // Массив координат (уже в формате Leaflet [lat, lon])
+                            const firstPolygon = boundary[0];
+                            if (firstPolygon && firstPolygon.length > 0) {
+                                let sumLat = 0, sumLon = 0, count = 0;
+                                firstPolygon.forEach(coord => {
+                                    if (Array.isArray(coord) && coord.length >= 2) {
+                                        const lat = coord[0]; // Leaflet: [lat, lon]
+                                        const lon = coord[1] > 180 ? coord[1] - 360 : coord[1];
+                                        sumLat += lat;
+                                        sumLon += lon;
+                                        count++;
+                                    }
+                                });
+                                if (count > 0) {
+                                    centerLat = sumLat / count;
+                                    centerLon = sumLon / count;
+                                }
+                            }
                         }
-                    }
-                    
-                    // Потом показываем маркер города (после отображения границ страны)
+                        
+                        addTextLabel(centerLat, centerLon, params.city, '#ff6b6b');
+                        addDebugLog(`Подпись города "${params.city}" добавлена в центре [${centerLat.toFixed(4)}, ${centerLon.toFixed(4)}]`, 'success');
+                    }, 400);
+                } else {
+                    // Если границы не найдены, показываем маркер с подписью
+                    addDebugLog('Границы города не найдены, показываем маркер с подписью', 'warn');
                     setTimeout(() => {
-                        displayLocationMarker(cityData.lat, cityData.lon, params.city, 'city');
-                    }, 100);
+                        // Показываем маркер без подписи (showLabel=false), так как добавим подпись отдельно
+                        displayLocationMarker(cityData.lat, cityData.lon, params.city, 'city', false);
+                        // Добавляем подпись названия отдельно
+                        addTextLabel(cityData.lat, cityData.lon, params.city, '#ff6b6b');
+                    }, 400);
                 }
             } else {
                 // Город не найден даже по координатам
                 addDebugLog('Город не найден', 'error');
                 showError(`Город "${params.city}" не найден`);
-                
-                // Показываем страну на фоне
-                const countryData = await geocode(params.country);
-                if (countryData) {
-                    const countryBoundary = await getBoundaryByQuery(params.country);
-                    if (countryBoundary) {
-                        displayBoundary(countryBoundary, '#3388ff', 0.2);
-                        fitToBounds(countryBoundary, 0);
-                    } else {
-                        map.setView([countryData.lat, countryData.lon], 6);
-                    }
-                }
             }
         }
         // Случай 3: country + region
         else if (params.region) {
-            addDebugLog(`Обработка региона: ${params.region}`, 'info');
+            addDebugLog(`Обработка региона: ${params.region} в стране: ${params.country}`, 'info');
+            
+            // Сначала загружаем и показываем границы страны
+            addDebugLog('Шаг 1: Загружаем границы страны', 'info');
+            const countryData = await geocode(params.country);
+            if (countryData) {
+                const countryLower = params.country ? params.country.toLowerCase().trim() : '';
+                let countryBoundary = null;
+                
+                if (countryLower === 'россия' || countryLower === 'russia') {
+                    countryBoundary = await getBoundaryByQuery('Россия');
+                } else {
+                    countryBoundary = await getBoundaryByQuery(params.country);
+                    if (!countryBoundary) {
+                        countryBoundary = await getBoundaryByOverpassQuery(params.country, null, true);
+                    }
+                }
+                
+                if (countryBoundary) {
+                    addDebugLog('Границы страны найдены, отображаем на карте', 'success');
+                    displayBoundary(countryBoundary, '#3388ff', 0.2, false); // не очищаем маркеры
+                    
+                    // Масштабируем карту на страну
+                    setTimeout(() => {
+                        addDebugLog('Масштабируем карту на страну', 'info');
+                        fitToBounds(null, 0);
+                    }, 300);
+                } else {
+                    addDebugLog('Границы страны не найдены, центрируем на стране', 'warn');
+                    safeSetView(countryData.lat, countryData.lon, 6);
+                }
+            }
+            
+            // Затем загружаем и показываем регион с заливкой
+            addDebugLog('Шаг 2: Загружаем данные региона', 'info');
             const regionData = await geocode(params.region, params.country);
             if (regionData) {
                 addDebugLog(`Данные региона получены: lat=${regionData.lat}, lon=${regionData.lon}`, 'info');
                 const boundary = await getBoundaryByQuery(params.region, params.country);
-                if (boundary) {
-                    addDebugLog('Границы региона найдены, отображаем на карте', 'success');
-                    displayBoundary(boundary, '#51cf66', 0.25);
-                    // Ждем немного, чтобы слои успели добавиться, затем масштабируем
-                    setTimeout(() => {
-                        addDebugLog('Вызываем fitToBounds для региона', 'info');
-                        fitToBounds(null, 0.6); // 60% padding, используем границы слоев
-                    }, 200);
-                } else {
-                    // Если границы не найдены, показываем точку региона
-                    addDebugLog('Границы региона не найдены, показываем точку местоположения', 'warn');
-                    
-                    // Сначала показываем границы страны на фоне, если они есть
-                    const countryData = await geocode(params.country);
-                    if (countryData) {
-                        const countryBoundary = await getBoundaryByQuery(params.country);
-                        if (countryBoundary) {
-                            // Не очищаем маркеры при отображении границ страны в фоне
-                            displayBoundary(countryBoundary, '#3388ff', 0.1, false); // более прозрачные границы страны
-                        }
+                
+                // Если не нашли через Nominatim, пробуем через Overpass
+                if (!boundary) {
+                    addDebugLog('Границы не найдены через Nominatim, пробуем через Overpass', 'info');
+                    const overpassBoundary = await getBoundaryByOverpassQuery(params.region, params.country, false);
+                    if (overpassBoundary) {
+                        addDebugLog('Границы региона найдены через Overpass', 'success');
+                        // Отображаем границы региона с заливкой (не очищаем маркеры, чтобы не удалить границы страны)
+                        displayBoundary(overpassBoundary, '#51cf66', 0.4, false); // большая заливка для региона
+                    } else {
+                        // Если границы не найдены, показываем маркер
+                        addDebugLog('Границы региона не найдены, показываем маркер', 'warn');
+                        setTimeout(() => {
+                            displayLocationMarker(regionData.lat, regionData.lon, params.region, 'region', true);
+                        }, 400);
                     }
-                    
-                    // Потом показываем маркер региона (после отображения границ страны)
-                    setTimeout(() => {
-                        displayLocationMarker(regionData.lat, regionData.lon, params.region, 'region');
-                    }, 100);
+                } else {
+                    addDebugLog('Границы региона найдены, отображаем на карте с заливкой', 'success');
+                    // Отображаем границы региона с заливкой (не очищаем маркеры, чтобы не удалить границы страны)
+                    displayBoundary(boundary, '#51cf66', 0.4, false); // большая заливка для региона
                 }
             } else {
                 // Регион не найден даже по координатам
                 addDebugLog('Регион не найден', 'error');
                 showError(`Область "${params.region}" не найдена`);
-                
-                // Показываем страну на фоне
-                const countryData = await geocode(params.country);
-                if (countryData) {
-                    const countryBoundary = await getBoundaryByQuery(params.country);
-                    if (countryBoundary) {
-                        displayBoundary(countryBoundary, '#3388ff', 0.2);
-                        fitToBounds(countryBoundary, 0);
-                    } else {
-                        map.setView([countryData.lat, countryData.lon], 6);
-                    }
-                }
             }
         }
         } // закрываем else блок для isRdaCode
