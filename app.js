@@ -1257,9 +1257,10 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
     const latSize = maxLat - minLat;
     
     // Вычисляем безопасное расстояние для подписи
-    // Используем минимум 0.15 градуса или 25% от размера области (но не более 1 градуса)
-    let labelOffset = Math.max(0.15, latSize * 0.25);
-    labelOffset = Math.min(labelOffset, 1.0); // Ограничиваем максимум 1 градусом
+    // Используем минимум 0.2 градуса или 30% от размера области (но не более 2 градусов)
+    // Увеличиваем смещение для лучшей видимости при большом масштабе страны
+    let labelOffset = Math.max(0.2, latSize * 0.3);
+    labelOffset = Math.min(labelOffset, 2.0); // Ограничиваем максимум 2 градусами для больших стран
     
     // Размещаем подпись выше северной границы
     const labelLat = maxLat + labelOffset;
@@ -1629,11 +1630,14 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
                     }
                     
                     try {
+                        // Для городов используем более толстую линию и большую прозрачность для видимости
+                        const isCity = color === '#ff6b6b'; // красный цвет = город
                         const polygon = L.polygon(validCoords, {
                             color: color,
                             fillColor: color,
                             fillOpacity: fillOpacity,
-                            weight: 3
+                            weight: isCity ? 4 : 3, // Более толстая линия для городов
+                            opacity: isCity ? 0.8 : 0.6 // Более яркая линия для городов
                         });
                         polygon.addTo(map);
                         boundaryLayers.push(polygon);
@@ -1733,12 +1737,15 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
                                 coordinates: normalizedPolygon
                             };
                             
+                            // Для городов используем более толстую линию и большую прозрачность для видимости
+                            const isCity = color === '#ff6b6b'; // красный цвет = город
                             const polygonLayer = L.geoJSON(singlePolygon, {
                                 style: {
                                     color: color,
                                     fillColor: color,
                                     fillOpacity: fillOpacity,
-                                    weight: 3
+                                    weight: isCity ? 4 : 3, // Более толстая линия для городов
+                                    opacity: isCity ? 0.8 : 0.6 // Более яркая линия для городов
                                 }
                             });
                             
@@ -1805,12 +1812,15 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
                     return;
                 }
                 
+                // Для городов используем более толстую линию и большую прозрачность для видимости
+                const isCity = color === '#ff6b6b'; // красный цвет = город
                 const geoJsonLayer = L.geoJSON(geojson, {
                     style: {
                         color: color,
                         fillColor: color,
                         fillOpacity: fillOpacity,
-                        weight: 3
+                        weight: isCity ? 4 : 3, // Более толстая линия для городов
+                        opacity: isCity ? 0.8 : 0.6 // Более яркая линия для городов
                     }
                 });
                 geoJsonLayer.addTo(map);
@@ -2996,7 +3006,8 @@ async function init() {
                     // Ждем, пока страна отобразится и зазумится, затем добавляем город поверх
                     setTimeout(() => {
                         // Отображаем границы города поверх границ страны (не очищаем предыдущие слои)
-                        displayBoundary(boundary, '#ff6b6b', 0.3, false, false);
+                        // Используем более яркий цвет и большую прозрачность для видимости на фоне страны
+                        displayBoundary(boundary, '#ff6b6b', 0.5, false, false);
                         
                         // Добавляем подпись названия города над городом (не перекрывая границы) после отображения границ
                         setTimeout(() => {
