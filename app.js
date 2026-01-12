@@ -3401,6 +3401,10 @@ async function init() {
                         setTimeout(() => {
                             // Отображаем границы региона с заливкой поверх границ страны (не очищаем предыдущие слои)
                             displayBoundary(overpassBoundary, '#51cf66', 0.4, false, false); // большая заливка для региона
+                            
+                            // Добавляем подпись с названием региона
+                            addTextLabel(overpassBoundary, regionData.lat, regionData.lon, params.region, '#51cf66');
+                            addDebugLog(`Подпись региона "${params.region}" добавлена над регионом с автоматическим пересчетом`, 'success');
                         }, 500);
                     } else {
                         // Если границы не найдены, показываем маркер
@@ -3415,6 +3419,10 @@ async function init() {
                     setTimeout(() => {
                         // Отображаем границы региона с заливкой поверх границ страны (не очищаем предыдущие слои)
                         displayBoundary(boundary, '#51cf66', 0.4, false, false); // большая заливка для региона
+                        
+                        // Добавляем подпись с названием региона
+                        addTextLabel(boundary, regionData.lat, regionData.lon, params.region, '#51cf66');
+                        addDebugLog(`Подпись региона "${params.region}" добавлена над регионом с автоматическим пересчетом`, 'success');
                     }, 500);
                 }
             } else {
