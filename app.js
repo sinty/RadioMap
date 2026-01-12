@@ -1360,7 +1360,7 @@ function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) 
     // Скрываем панель управления
     const panel = document.getElementById('label-control-panel');
     if (panel) {
-        panel.style.display = 'none';
+        panel.classList.remove('visible');
     }
     
     // Определяем цвет и иконку в зависимости от типа
@@ -1921,7 +1921,7 @@ function displayBoundary(geojson, color = '#3388ff', fillOpacity = 0.2, clearMar
         // Скрываем панель управления
         const panel = document.getElementById('label-control-panel');
         if (panel) {
-            panel.style.display = 'none';
+            panel.classList.remove('visible');
         }
     }
     
