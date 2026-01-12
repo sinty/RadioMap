@@ -170,7 +170,7 @@ function initLabelControlPanel() {
         
         // Устанавливаем значение ползунка
         if (manualLabelOffset !== null) {
-            newSliderEl.value = (manualLabelOffset * 10).toFixed(1); // умножаем на 10 для более точного управления
+            newSliderEl.value = manualLabelOffset.toFixed(3); // прямое значение в градусах
             offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
         } else {
             newSliderEl.value = 0;
@@ -187,7 +187,7 @@ function initLabelControlPanel() {
             manualLabelOffset = null;
             offsetValue.textContent = 'Авто';
         } else {
-            manualLabelOffset = value / 10; // делим на 10 обратно
+            manualLabelOffset = value; // прямое значение в градусах (0-2)
             offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
         }
         
@@ -1266,6 +1266,54 @@ let currentLabelData = null; // { boundary, centerLat, centerLon, text, color, m
 // Переменная для хранения значения отступа подписи (null = автоматический расчет)
 let manualLabelOffset = null; // значение в градусах или null для авто
 
+// Таблица отступов в зависимости от масштаба (zoom -> offset в градусах)
+const zoomOffsetTable = {
+    4.0: 2.300,
+    5.0: 1.0600,
+    6.0: 0.6,
+    7.0: 0.2,
+    8.0: 0.1
+};
+
+// Функция для получения отступа из таблицы на основе текущего масштаба
+function getOffsetFromTable(zoom) {
+    // Если точное значение есть в таблице, возвращаем его
+    if (zoomOffsetTable[zoom]) {
+        return zoomOffsetTable[zoom];
+    }
+    
+    // Ищем ближайшие значения в таблице для интерполяции
+    const zoomKeys = Object.keys(zoomOffsetTable).map(Number).sort((a, b) => a - b);
+    
+    // Если zoom меньше минимального, используем максимальный отступ
+    if (zoom <= zoomKeys[0]) {
+        return zoomOffsetTable[zoomKeys[0]];
+    }
+    
+    // Если zoom больше максимального, используем минимальный отступ
+    if (zoom >= zoomKeys[zoomKeys.length - 1]) {
+        return zoomOffsetTable[zoomKeys[zoomKeys.length - 1]];
+    }
+    
+    // Находим два ближайших значения для интерполяции
+    for (let i = 0; i < zoomKeys.length - 1; i++) {
+        const zoom1 = zoomKeys[i];
+        const zoom2 = zoomKeys[i + 1];
+        
+        if (zoom >= zoom1 && zoom <= zoom2) {
+            // Линейная интерполяция
+            const offset1 = zoomOffsetTable[zoom1];
+            const offset2 = zoomOffsetTable[zoom2];
+            const ratio = (zoom - zoom1) / (zoom2 - zoom1);
+            const interpolatedOffset = offset1 + (offset2 - offset1) * ratio;
+            return interpolatedOffset;
+        }
+    }
+    
+    // Fallback (не должно произойти)
+    return 0.2;
+}
+
 // Функция для отображения маркера местоположения
 function displayLocationMarker(lat, lon, name, type = 'city', showLabel = true) {
     // Очищаем предыдущие маркеры
@@ -1435,71 +1483,9 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
         return { lat: labelLat, lon: labelLon };
     }
     
-    // Автоматический расчет отступа
+    // Автоматический расчет отступа на основе таблицы
     const currentZoom = map.getZoom();
-    
-    // Вычисляем размер одного градуса широты в пикселях на текущем масштабе
-    const point1 = map.latLngToContainerPoint([maxLat, labelLon]);
-    const point2 = map.latLngToContainerPoint([maxLat + 1, labelLon]);
-    const pixelsPerDegree = Math.abs(point2.y - point1.y);
-    
-    // Высота подписи примерно 40 пикселей, добавляем отступ 20 пикселей сверху
-    const labelHeightPixels = 40;
-    const paddingPixels = 20;
-    const totalOffsetPixels = labelHeightPixels + paddingPixels;
-    
-    // Конвертируем отступ из пикселей в градусы
-    let offsetInDegrees = totalOffsetPixels / pixelsPerDegree;
-    
-    // Для маленьких масштабов (zoom < 8) используем больший отступ в градусах
-    // Для больших масштабов (zoom >= 8) используем пиксельный расчет
-    if (currentZoom < 8) {
-        // На маленьких масштабах используем градусный расчет с учетом размера области
-        // Вычисляем размер области по широте
-        let minLat = Infinity;
-        if (boundary && boundary.type === 'Polygon' && boundary.coordinates && boundary.coordinates[0]) {
-            const coords = boundary.coordinates[0];
-            coords.forEach(coord => {
-                const lat = coord[1]; // GeoJSON: [lon, lat]
-                if (lat < minLat) minLat = lat;
-            });
-        } else if (boundary && boundary.type === 'MultiPolygon' && boundary.coordinates && boundary.coordinates.length > 0) {
-            const firstPolygon = boundary.coordinates[0];
-            if (firstPolygon && firstPolygon[0]) {
-                const coords = firstPolygon[0];
-                coords.forEach(coord => {
-                    const lat = coord[1]; // GeoJSON: [lon, lat]
-                    if (lat < minLat) minLat = lat;
-                });
-            }
-        } else if (Array.isArray(boundary) && boundary.length > 0) {
-            const firstPolygon = boundary[0];
-            if (firstPolygon && firstPolygon.length > 0) {
-                firstPolygon.forEach(coord => {
-                    if (Array.isArray(coord) && coord.length >= 2) {
-                        const lat = coord[0]; // Leaflet: [lat, lon]
-                        if (lat < minLat) minLat = lat;
-                    }
-                });
-            }
-        }
-        
-        if (minLat !== Infinity) {
-            const latSize = maxLat - minLat;
-            // Используем 15-30% от размера области, но не менее 0.2 градуса
-            const percentOffset = Math.max(0.15, Math.min(0.3, latSize * 0.2));
-            offsetInDegrees = Math.max(0.2, percentOffset);
-        } else {
-            // Если не удалось найти размер, используем фиксированный отступ
-            offsetInDegrees = 0.3;
-        }
-    }
-    
-    // Минимальный отступ - 0.01 градуса (для очень большого зума)
-    // Максимальный отступ - 1.0 градуса (для очень маленького зума)
-    const minOffset = 0.01;
-    const maxOffset = 1.0;
-    const finalOffset = Math.max(minOffset, Math.min(maxOffset, offsetInDegrees));
+    const finalOffset = getOffsetFromTable(currentZoom);
     
     // Размещаем подпись выше северной границы с рассчитанным отступом
     const labelLat = maxLat + finalOffset;
