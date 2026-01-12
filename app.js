@@ -1320,17 +1320,30 @@ function calculateLabelPosition(boundary, centerLat, centerLon) {
     // Вычисляем отступ вверх на основе текущего масштаба карты
     const currentZoom = map.getZoom();
     
-    // При большом масштабе (близко) - маленький отступ, при маленьком масштабе (далеко) - большой отступ
-    // Zoom обычно от 1 до 18, где 1 - весь мир, 18 - очень близко
-    // Используем обратную зависимость: чем меньше zoom, тем больше отступ
-    const baseOffset = 0.15; // базовый отступ в градусах
-    const zoomFactor = (19 - currentZoom) / 18; // от 1 (zoom=1) до 0 (zoom=18)
-    const dynamicOffset = baseOffset * (1 + zoomFactor * 2); // от 0.15 до 0.45 градусов
+    // Используем пиксели для более точного расчета отступа
+    // Вычисляем размер одного градуса широты в пикселях на текущем масштабе
+    const point1 = map.latLngToContainerPoint([maxLat, labelLon]);
+    const point2 = map.latLngToContainerPoint([maxLat + 1, labelLon]);
+    const pixelsPerDegree = Math.abs(point2.y - point1.y);
     
-    // Размещаем подпись выше северной границы с динамическим отступом
-    const labelLat = maxLat + dynamicOffset;
+    // Высота подписи примерно 40 пикселей, добавляем отступ 20 пикселей сверху
+    const labelHeightPixels = 40;
+    const paddingPixels = 20;
+    const totalOffsetPixels = labelHeightPixels + paddingPixels;
     
-    addDebugLog(`Позиция подписи: maxLat=${maxLat.toFixed(4)}, zoom=${currentZoom}, offset=${dynamicOffset.toFixed(4)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
+    // Конвертируем отступ из пикселей в градусы
+    const offsetInDegrees = totalOffsetPixels / pixelsPerDegree;
+    
+    // Минимальный отступ - 0.01 градуса (для очень большого зума)
+    // Максимальный отступ - 0.5 градуса (для очень маленького зума)
+    const minOffset = 0.01;
+    const maxOffset = 0.5;
+    const finalOffset = Math.max(minOffset, Math.min(maxOffset, offsetInDegrees));
+    
+    // Размещаем подпись выше северной границы с рассчитанным отступом
+    const labelLat = maxLat + finalOffset;
+    
+    addDebugLog(`Позиция подписи: maxLat=${maxLat.toFixed(4)}, zoom=${currentZoom}, pixelsPerDegree=${pixelsPerDegree.toFixed(2)}, offset=${finalOffset.toFixed(6)}°, итоговая lat=${labelLat.toFixed(4)}`, 'info');
     
     return { lat: labelLat, lon: labelLon };
 }
