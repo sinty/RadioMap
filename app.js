@@ -139,6 +139,9 @@ function updateZoomDisplay() {
     }
 }
 
+// Переменная для хранения таймера debounce
+let offsetUpdateTimer = null;
+
 // Инициализация панели управления отступом
 function initLabelControlPanel() {
     const panel = document.getElementById('label-control-panel');
@@ -150,6 +153,16 @@ function initLabelControlPanel() {
         return;
     }
     
+    // Удаляем старые обработчики, если они есть (чтобы не дублировать)
+    const newSlider = slider.cloneNode(true);
+    slider.parentNode.replaceChild(newSlider, slider);
+    const newResetBtn = resetBtn.cloneNode(true);
+    resetBtn.parentNode.replaceChild(newResetBtn, resetBtn);
+    
+    // Получаем новые элементы
+    const newSliderEl = document.getElementById('offset-slider');
+    const newResetBtnEl = document.getElementById('reset-offset-btn');
+    
     // Показываем панель только если есть подпись
     if (currentLabelData) {
         panel.style.display = 'block';
@@ -157,19 +170,19 @@ function initLabelControlPanel() {
         
         // Устанавливаем значение ползунка
         if (manualLabelOffset !== null) {
-            slider.value = (manualLabelOffset * 10).toFixed(1); // умножаем на 10 для более точного управления
+            newSliderEl.value = (manualLabelOffset * 10).toFixed(1); // умножаем на 10 для более точного управления
             offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
         } else {
-            slider.value = 0;
+            newSliderEl.value = 0;
             offsetValue.textContent = 'Авто';
         }
     } else {
         panel.style.display = 'none';
     }
     
-    // Обработчик изменения ползунка
-    slider.addEventListener('input', function() {
-        const value = parseFloat(slider.value);
+    // Обработчик изменения ползунка с debounce
+    newSliderEl.addEventListener('input', function() {
+        const value = parseFloat(newSliderEl.value);
         if (value === 0) {
             manualLabelOffset = null;
             offsetValue.textContent = 'Авто';
@@ -178,16 +191,30 @@ function initLabelControlPanel() {
             offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
         }
         
-        // Обновляем позицию подписи
-        if (currentLabelData) {
-            updateLabelPosition();
+        // Очищаем предыдущий таймер
+        if (offsetUpdateTimer) {
+            clearTimeout(offsetUpdateTimer);
         }
+        
+        // Обновляем позицию подписи с задержкой (debounce)
+        offsetUpdateTimer = setTimeout(function() {
+            if (currentLabelData) {
+                updateLabelPosition();
+            }
+            offsetUpdateTimer = null;
+        }, 150); // 150ms задержка
     });
     
     // Обработчик кнопки сброса
-    resetBtn.addEventListener('click', function() {
+    newResetBtnEl.addEventListener('click', function() {
+        // Очищаем таймер, если он есть
+        if (offsetUpdateTimer) {
+            clearTimeout(offsetUpdateTimer);
+            offsetUpdateTimer = null;
+        }
+        
         manualLabelOffset = null;
-        slider.value = 0;
+        newSliderEl.value = 0;
         offsetValue.textContent = 'Авто';
         if (currentLabelData) {
             updateLabelPosition();
@@ -1499,8 +1526,21 @@ function updateLabelPosition() {
     // Обновляем позицию маркера
     currentLabelData.marker.setLatLng([newPos.lat, newPos.lon]);
     
-    // Обновляем отображение панели
-    initLabelControlPanel();
+    // Обновляем отображение панели (но не переинициализируем обработчики, чтобы избежать дублирования)
+    const panel = document.getElementById('label-control-panel');
+    const offsetValue = document.getElementById('offset-value');
+    if (panel && currentLabelData) {
+        panel.style.display = 'block';
+        updateZoomDisplay();
+        // Обновляем только значение отступа в UI, не переинициализируя обработчики
+        if (offsetValue) {
+            if (manualLabelOffset !== null) {
+                offsetValue.textContent = manualLabelOffset.toFixed(4) + '°';
+            } else {
+                offsetValue.textContent = 'Авто';
+            }
+        }
+    }
     
     addDebugLog(`Позиция подписи обновлена: [${newPos.lat.toFixed(4)}, ${newPos.lon.toFixed(4)}]`, 'info');
 }
